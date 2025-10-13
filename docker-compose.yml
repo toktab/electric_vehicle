@@ -5,7 +5,7 @@ services:
   # Infrastructure - Zookeeper & Kafka
   # ============================================================================
   zookeeper:
-    image: bitnami/zookeeper:latest
+    image: confluentinc/cp-zookeeper:7.3.0
     container_name: evcharging_zookeeper
     environment:
       - ALLOW_ANONYMOUS_LOGIN=yes
@@ -15,7 +15,7 @@ services:
       - zookeeper_data:/bitnami/zookeeper
 
   kafka:
-    image: bitnami/kafka:latest
+    image: confluentinc/cp-kafka:7.3.0
     container_name: evcharging_kafka
     depends_on:
       - zookeeper
