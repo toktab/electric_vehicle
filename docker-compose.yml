@@ -1,0 +1,48 @@
+version: '3'
+services:
+  kafka:
+    image: bitnami/kafka:latest
+    environment:
+      - KAFKA_BROKER_ID=1
+      - KAFKA_ZOOKEEPER_CONNECT=zookeeper:2181
+      - ALLOW_PLAINTEXT_LISTENER=yes
+    ports:
+      - "9092:9092"
+    depends_on:
+      - zookeeper
+
+  zookeeper:
+    image: bitnami/zookeeper:latest
+    ports:
+      - "2181:2181"
+
+  central:
+    build: ./central
+    depends_on:
+      - kafka
+    networks:
+      - evnet
+
+  cp_engine:
+    build: ./cp_engine
+    depends_on:
+      - central
+    networks:
+      - evnet
+
+  cp_monitor:
+    build: ./cp_monitor
+    depends_on:
+      - kafka
+    networks:
+      - evnet
+
+  driver:
+    build: ./driver
+    depends_on:
+      - central
+    networks:
+      - evnet
+
+networks:
+  evnet:
