@@ -303,6 +303,9 @@ class EVCPEngine:
                         # Stop if reached target
                         if session["kwh_delivered"] >= session["kwh_needed"]:
                             session["kwh_delivered"] = session["kwh_needed"]
+                            print(f"[{self.cp_id}] Target reached, auto-stopping...")
+                            self.stop_charging()
+                            break  # Exit charging loop
 
                         amount = round(session["kwh_delivered"] * self.price_per_kwh, 2)
 

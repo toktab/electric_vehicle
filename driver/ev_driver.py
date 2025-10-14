@@ -93,6 +93,9 @@ class EVDriver:
                             elif msg_type == MessageTypes.TICKET:
                                 self._handle_ticket(fields)
 
+                            elif msg_type == MessageTypes.SUPPLY_UPDATE:
+                                self._handle_supply_update(fields)
+
                         else:
                             break
 
@@ -124,6 +127,7 @@ class EVDriver:
             "cp_id": cp_id,
             "kwh_needed": kwh_needed
         })
+        print(f"[{self.cp_id}] Vehicle plugged in automatically, starting supply...")
 
     def _handle_denial(self, fields):
         """Handle charging denial from CENTRAL"""
@@ -168,6 +172,19 @@ class EVDriver:
             "total_kwh": total_kwh,
             "total_amount": total_amount
         })
+
+    def _handle_supply_update(self, fields):
+        """Handle real-time supply updates during charging"""
+        # SUPPLY_UPDATE#cp_id#consumption_kw#amount_euro
+        if len(fields) < 4:
+            return
+        
+        cp_id = fields[1]
+        consumption_kw = fields[2]
+        amount_euro = fields[3]
+        
+        print(f"[{self.driver_id}] ⚡ Charging at {cp_id}: "
+            f"{consumption_kw} kW - {amount_euro}€")
 
     def load_requests_from_file(self):
         """Load charging requests from file"""
