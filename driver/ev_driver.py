@@ -127,7 +127,7 @@ class EVDriver:
             "cp_id": cp_id,
             "kwh_needed": kwh_needed
         })
-        print(f"[{self.cp_id}] Vehicle plugged in automatically, starting supply...")
+        print(f"[{self.driver_id}] Vehicle plugged in automatically, starting supply...")
 
     def _handle_denial(self, fields):
         """Handle charging denial from CENTRAL"""
@@ -282,6 +282,11 @@ class EVDriver:
                 choice = input("Choice (or press Enter to continue): ").strip()
 
                 if choice == "1":
+                    # Reset status if previous charge completed
+                    if self.status in ["COMPLETED", "DENIED"]:
+                        with self.lock:
+                            self.status = "IDLE"
+                    
                     cp_id = input("Enter CP ID: ").strip()
                     kwh_str = input("Enter kWh needed (default 10): ").strip()
                     kwh = float(kwh_str) if kwh_str else 10
