@@ -12,6 +12,8 @@ services:
       ZOOKEEPER_TICK_TIME: 2000
     ports:
       - "2181:2181"
+    volumes:
+      - zookeeper_data:/bitnami/zookeeper
     networks:
       - evcharging_net
 
@@ -21,19 +23,21 @@ services:
     depends_on:
       - zookeeper
     environment:
-      KAFKA_BROKER_ID: 1
-      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
-      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
-      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092
-      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
-      ALLOW_PLAINTEXT_LISTENER: yes
+      - KAFKA_BROKER_ID=1
+      - KAFKA_ZOOKEEPER_CONNECT=zookeeper:2181
+      - KAFKA_ADVERTISED_LISTENERS=PLAINTEXT://kafka:9092
+      - KAFKA_LISTENERS=PLAINTEXT://0.0.0.0:9092
+      - KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR=1
+      - ALLOW_PLAINTEXT_LISTENER=yes
     ports:
       - "9092:9092"
+    volumes:
+      - kafka_data:/bitnami/kafka
     networks:
       - evcharging_net
 
   # ============================================================================
-  # CENTRAL - Control Center (Interactive for admin commands)
+  # Core System - CENTRAL
   # ============================================================================
   central:
     build:
@@ -43,7 +47,7 @@ services:
     depends_on:
       - kafka
     environment:
-      KAFKA_BROKER: kafka:9092
+      - KAFKA_BROKER=kafka:9092
     ports:
       - "5000:5000"
     networks:
@@ -52,7 +56,7 @@ services:
     tty: true
 
   # ============================================================================
-  # Charging Point 1 - Engine + Monitor
+  # Charging Point 1 - Engine
   # ============================================================================
   cp_engine_1:
     build:
@@ -61,8 +65,9 @@ services:
     container_name: evcharging_cp_engine_1
     depends_on:
       - central
+      - kafka
     environment:
-      KAFKA_BROKER: kafka:9092
+      - KAFKA_BROKER=kafka:9092
     command: python charging_point/ev_cp_engine.py CP-001 40.5 -3.1 0.30 central 5000
     ports:
       - "6001:6001"
@@ -71,21 +76,28 @@ services:
     stdin_open: true
     tty: true
 
+  # ============================================================================
+  # Charging Point 1 - Monitor
+  # ============================================================================
   cp_monitor_1:
     build:
       context: .
       dockerfile: Dockerfile.cp
     container_name: evcharging_cp_monitor_1
     depends_on:
+      - central
       - cp_engine_1
+      - kafka
     environment:
-      KAFKA_BROKER: kafka:9092
+      - KAFKA_BROKER=kafka:9092
     command: python charging_point/ev_cp_monitor.py CP-001 cp_engine_1 6001 central 5000
     networks:
       - evcharging_net
+    stdin_open: true
+    tty: true
 
   # ============================================================================
-  # Charging Point 2 - Engine + Monitor
+  # Charging Point 2 - Engine
   # ============================================================================
   cp_engine_2:
     build:
@@ -94,8 +106,9 @@ services:
     container_name: evcharging_cp_engine_2
     depends_on:
       - central
+      - kafka
     environment:
-      KAFKA_BROKER: kafka:9092
+      - KAFKA_BROKER=kafka:9092
     command: python charging_point/ev_cp_engine.py CP-002 40.4 -3.2 0.35 central 5000
     ports:
       - "6002:6002"
@@ -104,34 +117,63 @@ services:
     stdin_open: true
     tty: true
 
+  # ============================================================================
+  # Charging Point 2 - Monitor
+  # ============================================================================
   cp_monitor_2:
     build:
       context: .
       dockerfile: Dockerfile.cp
     container_name: evcharging_cp_monitor_2
     depends_on:
+      - central
       - cp_engine_2
+      - kafka
     environment:
-      KAFKA_BROKER: kafka:9092
+      - KAFKA_BROKER=kafka:9092
     command: python charging_point/ev_cp_monitor.py CP-002 cp_engine_2 6002 central 5000
     networks:
       - evcharging_net
+    stdin_open: true
+    tty: true
 
   # ============================================================================
-  # Driver - AUTOMATED (processes file automatically)
+  # Driver 1
   # ============================================================================
-  driver:
+  driver_1:
     build:
       context: .
       dockerfile: Dockerfile.driver
-    container_name: evcharging_driver
+    container_name: evcharging_driver_1
     depends_on:
       - central
+      - kafka
     environment:
-      KAFKA_BROKER: kafka:9092
+      - KAFKA_BROKER=kafka:9092
     command: python driver/ev_driver.py DRIVER-001 central 5000 data/charging_requests.txt
     networks:
       - evcharging_net
+    stdin_open: true
+    tty: true
+
+  # ============================================================================
+  # Driver 2
+  # ============================================================================
+  driver_2:
+    build:
+      context: .
+      dockerfile: Dockerfile.driver
+    container_name: evcharging_driver_2
+    depends_on:
+      - central
+      - kafka
+    environment:
+      - KAFKA_BROKER=kafka:9092
+    command: python driver/ev_driver.py DRIVER-002 central 5000
+    networks:
+      - evcharging_net
+    stdin_open: true
+    tty: true
 
 networks:
   evcharging_net:
