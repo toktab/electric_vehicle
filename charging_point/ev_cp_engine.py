@@ -1,5 +1,5 @@
 # ============================================================================
-# EVCharging System - EV_CP_E (Charging Point Engine)
+# EVCharging System - EV_CP_E (Charging Point Engine) - FIXED VERSION
 # ============================================================================
 
 import socket
@@ -123,8 +123,16 @@ class EVCPEngine:
                             buffer = buffer[etx_pos + 2:]
 
                             fields = Protocol.parse_message(message)
+                            
                             if fields[0] == MessageTypes.AUTHORIZE:
                                 self._handle_authorization(fields)
+                            
+                            # ✅ FIX #5: Handle STOP/RESUME commands from CENTRAL
+                            elif fields[0] == MessageTypes.STOP_COMMAND:
+                                self._handle_stop_command()
+                            
+                            elif fields[0] == MessageTypes.RESUME_COMMAND:
+                                self._handle_resume_command()
 
                         else:
                             break
@@ -188,6 +196,20 @@ class EVCPEngine:
                 }
 
                 print(f"[{self.cp_id}] Charging authorized for {driver_id}")
+
+    # ✅ FIX #5: Handle STOP command from CENTRAL
+    def _handle_stop_command(self):
+        """Handle STOP command from CENTRAL"""
+        with self.lock:
+            self.state = CP_STATES["STOPPED"]
+        print(f"[{self.cp_id}] Received STOP command from CENTRAL")
+
+    # ✅ FIX #5: Handle RESUME command from CENTRAL
+    def _handle_resume_command(self):
+        """Handle RESUME command from CENTRAL"""
+        with self.lock:
+            self.state = CP_STATES["ACTIVATED"]
+        print(f"[{self.cp_id}] Received RESUME command from CENTRAL")
 
     def start_charging(self, driver_id):
         """

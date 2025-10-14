@@ -1,5 +1,5 @@
 # ============================================================================
-# EVCharging System - EV_Central (Control Center)
+# EVCharging System - EV_Central (Control Center) - FIXED VERSION
 # ============================================================================
 
 import socket
@@ -26,6 +26,9 @@ class EVCentral:
         self.charging_points = {}     # {cp_id: {state, location, price, etc}}
         self.drivers = {}             # {driver_id: {status, current_cp, etc}}
         self.active_connections = {}  # {connection_id: socket}
+
+        # ✅ FIX #1: Map entity IDs to their socket connections
+        self.entity_to_socket = {}    # {entity_id: socket}
 
         # Kafka client
         self.kafka = KafkaClient("EV_Central")
@@ -163,6 +166,9 @@ class EVCentral:
                     "consumption_kw": 0,
                     "amount_euro": 0
                 }
+                
+                # ✅ FIX #1: Map CP ID to socket
+                self.entity_to_socket[entity_id] = client_socket
 
             print(f"[EV_Central] CP Registered: {entity_id} at ({lat}, {lon})")
             self.kafka.publish_event("system_events", "CP_REGISTERED", {
@@ -185,6 +191,9 @@ class EVCentral:
                     "current_cp": None,
                     "charge_amount": 0
                 }
+                
+                # ✅ FIX #1: Map driver ID to socket
+                self.entity_to_socket[entity_id] = client_socket
 
             print(f"[EV_Central] Driver Registered: {entity_id}")
             response = Protocol.encode(
@@ -253,10 +262,26 @@ class EVCentral:
         consumption = float(fields[2])
         amount = float(fields[3])
 
+        driver_id = None
         with self.lock:
             if cp_id in self.charging_points:
                 self.charging_points[cp_id]["consumption_kw"] = consumption
                 self.charging_points[cp_id]["amount_euro"] = amount
+                
+                # ✅ FIX #2: Get driver being served
+                driver_id = self.charging_points[cp_id]["current_driver"]
+
+        # ✅ FIX #2: Forward update to driver's connection
+        if driver_id and driver_id in self.entity_to_socket:
+            try:
+                update_msg = Protocol.encode(
+                    Protocol.build_message(
+                        MessageTypes.SUPPLY_UPDATE, cp_id, consumption, amount
+                    )
+                )
+                self.entity_to_socket[driver_id].send(update_msg)
+            except Exception as e:
+                print(f"[EV_Central] Failed to forward update to {driver_id}: {e}")
 
     def _handle_supply_end(self, fields, client_socket):
         """Handle supply completion"""
@@ -283,6 +308,19 @@ class EVCentral:
 
         ticket = f"=== TICKET ===\nCP: {cp_id}\nTotal: {total_amount}€\nkWh: {total_kwh}"
         print(f"[EV_Central] Supply ended: {driver_id} at {cp_id}\n{ticket}")
+
+        # ✅ FIX #3: Send ticket to driver using tracked socket
+        if driver_id in self.entity_to_socket:
+            try:
+                ticket_msg = Protocol.encode(
+                    Protocol.build_message(
+                        MessageTypes.TICKET, cp_id, total_kwh, total_amount
+                    )
+                )
+                self.entity_to_socket[driver_id].send(ticket_msg)
+                print(f"[EV_Central] Ticket sent to {driver_id}")
+            except Exception as e:
+                print(f"[EV_Central] Failed to send ticket to {driver_id}: {e}")
 
         self.kafka.publish_event("charging_logs", "CHARGE_COMPLETED", {
             "cp_id": cp_id,
@@ -387,19 +425,37 @@ class EVCentral:
 
                 if cmd.startswith("stop"):
                     cp_id = cmd.split()[1] if len(cmd.split()) > 1 else None
-                    if cp_id:
+                    if cp_id and cp_id in self.entity_to_socket:
                         with self.lock:
                             if cp_id in self.charging_points:
                                 self.charging_points[cp_id]["state"] = CP_STATES["STOPPED"]
-                                print(f"CP {cp_id} stopped")
+                        
+                        # ✅ FIX #4: Send STOP command to CP Engine via socket
+                        try:
+                            stop_msg = Protocol.encode(
+                                Protocol.build_message(MessageTypes.STOP_COMMAND, cp_id)
+                            )
+                            self.entity_to_socket[cp_id].send(stop_msg)
+                            print(f"CP {cp_id} stopped")
+                        except Exception as e:
+                            print(f"Failed to stop CP: {e}")
 
                 if cmd.startswith("resume"):
                     cp_id = cmd.split()[1] if len(cmd.split()) > 1 else None
-                    if cp_id:
+                    if cp_id and cp_id in self.entity_to_socket:
                         with self.lock:
                             if cp_id in self.charging_points:
                                 self.charging_points[cp_id]["state"] = CP_STATES["ACTIVATED"]
-                                print(f"CP {cp_id} resumed")
+                        
+                        # ✅ FIX #4: Send RESUME command to CP Engine via socket
+                        try:
+                            resume_msg = Protocol.encode(
+                                Protocol.build_message(MessageTypes.RESUME_COMMAND, cp_id)
+                            )
+                            self.entity_to_socket[cp_id].send(resume_msg)
+                            print(f"CP {cp_id} resumed")
+                        except Exception as e:
+                            print(f"Failed to resume CP: {e}")
 
             except Exception as e:
                 print(f"Command error: {e}")
