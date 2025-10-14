@@ -1,5 +1,5 @@
 # ============================================================================
-# EVCharging System - EV_Central (Control Center) - FIXED VERSION
+# EVCharging System - EV_Central (Control Center) - COMPLETE FINAL VERSION
 # ============================================================================
 
 import socket
@@ -167,7 +167,7 @@ class EVCentral:
                     "amount_euro": 0
                 }
                 
-                # ✅ FIX #1: Map CP ID to socket
+                # ✅ FIX #1: Map CP ID to socket for direct communication
                 self.entity_to_socket[entity_id] = client_socket
 
             print(f"[EV_Central] CP Registered: {entity_id} at ({lat}, {lon})")
@@ -192,7 +192,7 @@ class EVCentral:
                     "charge_amount": 0
                 }
                 
-                # ✅ FIX #1: Map driver ID to socket
+                # ✅ FIX #1: Map driver ID to socket for direct communication
                 self.entity_to_socket[entity_id] = client_socket
 
             print(f"[EV_Central] Driver Registered: {entity_id}")
@@ -271,7 +271,7 @@ class EVCentral:
                 # ✅ FIX #2: Get driver being served
                 driver_id = self.charging_points[cp_id]["current_driver"]
 
-        # ✅ FIX #2: Forward update to driver's connection
+        # ✅ FIX #2: Forward update to driver's connection so they see real-time updates
         if driver_id and driver_id in self.entity_to_socket:
             try:
                 update_msg = Protocol.encode(
@@ -291,8 +291,8 @@ class EVCentral:
 
         cp_id = fields[1]
         driver_id = fields[2]
-        total_kwh = fields[3]
-        total_amount = fields[4]
+        total_kwh = float(fields[3])
+        total_amount = float(fields[4])
 
         with self.lock:
             if cp_id in self.charging_points:
@@ -439,6 +439,8 @@ class EVCentral:
                             print(f"CP {cp_id} stopped")
                         except Exception as e:
                             print(f"Failed to stop CP: {e}")
+                    else:
+                        print(f"CP {cp_id} not found or not connected")
 
                 if cmd.startswith("resume"):
                     cp_id = cmd.split()[1] if len(cmd.split()) > 1 else None
@@ -456,6 +458,8 @@ class EVCentral:
                             print(f"CP {cp_id} resumed")
                         except Exception as e:
                             print(f"Failed to resume CP: {e}")
+                    else:
+                        print(f"CP {cp_id} not found or not connected")
 
             except Exception as e:
                 print(f"Command error: {e}")

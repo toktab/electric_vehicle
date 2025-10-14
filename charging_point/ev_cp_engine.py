@@ -1,5 +1,5 @@
 # ============================================================================
-# EVCharging System - EV_CP_E (Charging Point Engine) - FIXED VERSION
+# EVCharging System - EV_CP_E (Charging Point Engine) - COMPLETE FINAL VERSION
 # ============================================================================
 
 import socket
@@ -45,7 +45,7 @@ class EVCPEngine:
         print(f"[{self.cp_id}] Engine initializing...")
 
     def connect_to_central(self):
-        """Connect to central system"""
+        """Connect to central system via socket"""
         try:
             self.central_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             self.central_socket.connect((self.central_host, self.central_port))
@@ -74,7 +74,7 @@ class EVCPEngine:
             return False
 
     def listen_for_monitor(self):
-        """Listen for Monitor connections"""
+        """Listen for Monitor connections via socket"""
         try:
             server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -104,7 +104,7 @@ class EVCPEngine:
             print(f"[{self.cp_id}] Monitor listening error: {e}")
 
     def _listen_central(self):
-        """Listen for messages from CENTRAL"""
+        """Listen for messages from CENTRAL via socket"""
         buffer = b''
         try:
             while self.running:
@@ -147,7 +147,7 @@ class EVCPEngine:
             print(f"[{self.cp_id}] CENTRAL connection lost: {e}")
 
     def _listen_monitor(self):
-        """Listen for health checks from monitor"""
+        """Listen for health checks from monitor via socket"""
         try:
             while self.running and self.monitor_socket:
                 data = self.monitor_socket.recv(4096)
@@ -201,15 +201,38 @@ class EVCPEngine:
     def _handle_stop_command(self):
         """Handle STOP command from CENTRAL"""
         with self.lock:
+            # If currently charging, end the session
+            if self.state == CP_STATES["SUPPLYING"] and self.current_session:
+                driver_id = self.current_driver
+                session = self.current_session
+                kwh_delivered = session["kwh_delivered"]
+                total_amount = round(kwh_delivered * self.price_per_kwh, 2)
+                
+                # Notify CENTRAL of supply end
+                end_msg = Protocol.encode(
+                    Protocol.build_message(
+                        MessageTypes.SUPPLY_END, self.cp_id, driver_id,
+                        kwh_delivered, total_amount
+                    )
+                )
+                try:
+                    self.central_socket.send(end_msg)
+                except Exception as e:
+                    print(f"[{self.cp_id}] Error notifying supply end: {e}")
+                
+                self.current_driver = None
+                self.current_session = None
+            
             self.state = CP_STATES["STOPPED"]
-        print(f"[{self.cp_id}] Received STOP command from CENTRAL")
+        
+        print(f"[{self.cp_id}] Received STOP command from CENTRAL - now stopped")
 
     # ✅ FIX #5: Handle RESUME command from CENTRAL
     def _handle_resume_command(self):
         """Handle RESUME command from CENTRAL"""
         with self.lock:
             self.state = CP_STATES["ACTIVATED"]
-        print(f"[{self.cp_id}] Received RESUME command from CENTRAL")
+        print(f"[{self.cp_id}] Received RESUME command from CENTRAL - now activated")
 
     def start_charging(self, driver_id):
         """
