@@ -7,7 +7,6 @@ import threading
 import time
 import sys
 import os
-from datetime import datetime
 from config import WAIT_BETWEEN_REQUESTS
 from shared.protocol import Protocol, MessageTypes
 from shared.kafka_client import KafkaClient

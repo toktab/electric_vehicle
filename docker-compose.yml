@@ -77,6 +77,7 @@ services:
       dockerfile: Dockerfile.cp
     container_name: evcharging_cp_monitor_1
     depends_on:
+      - central
       - cp_engine_1
     environment:
       KAFKA_BROKER: kafka:9092
@@ -124,7 +125,6 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.driver
-    container_name: evcharging_driver
     depends_on:
       - central
     environment:
@@ -133,6 +133,7 @@ services:
     networks:
       - evcharging_net
 
+ 
 networks:
   evcharging_net:
     driver: bridge

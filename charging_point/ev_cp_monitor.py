@@ -10,6 +10,18 @@ from config import CP_BASE_PORT, HEALTH_CHECK_INTERVAL
 from shared.protocol import Protocol, MessageTypes
 from shared.kafka_client import KafkaClient
 
+central_host = 'central'
+central_port = 5000
+
+while True:
+    try:
+        s = socket.create_connection((central_host, central_port), timeout=5)
+        print("Connected to CENTRAL")
+        break
+    except ConnectionRefusedError:
+        print("Cannot connect to CENTRAL yet, retrying in 2s...")
+        time.sleep(2)
+
 
 class EVCPMonitor:
     def __init__(self, cp_id, engine_host="localhost", engine_port=None,

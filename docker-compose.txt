@@ -124,7 +124,6 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.driver
-    container_name: evcharging_driver
     depends_on:
       - central
     environment:
