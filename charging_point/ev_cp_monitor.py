@@ -95,7 +95,7 @@ class EVCPMonitor:
                         if is_valid:
                             fields = Protocol.parse_message(response)
 
-                            if fields[0] == MessageTypes.HEALTH_OK:
+                            if fields[0] == "HEALTH_OK":
                                 with self.lock:
                                     if not self.engine_healthy:
                                         print(f"[{self.cp_id} Monitor] Engine recovered!")
@@ -115,7 +115,7 @@ class EVCPMonitor:
                                     self.engine_healthy = True
                                     self.consecutive_failures = 0
 
-                            elif fields[0] == MessageTypes.HEALTH_KO:
+                            elif fields[0] == "HEALTH_KO":
                                 self._handle_engine_fault()
 
                         else:

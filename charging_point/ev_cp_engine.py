@@ -8,7 +8,7 @@ import time
 import sys
 from datetime import datetime
 from config import CP_BASE_PORT, CP_STATES, COLORS, SUPPLY_UPDATE_INTERVAL
-from shared.protocol import Protocol, MessageTypes
+from shared.protocol import Protocol
 from shared.kafka_client import KafkaClient
 
 
@@ -53,7 +53,7 @@ class EVCPEngine:
             # Register with CENTRAL
             register_msg = Protocol.encode(
                 Protocol.build_message(
-                    MessageTypes.REGISTER, "CP", self.cp_id,
+                    "REGISTER", "CP", self.cp_id,
                     self.latitude, self.longitude, self.price_per_kwh
                 )
             )
@@ -124,17 +124,17 @@ class EVCPEngine:
 
                             fields = Protocol.parse_message(message)
                             
-                            if fields[0] == MessageTypes.AUTHORIZE:
+                            if fields[0] == "AUTHORIZE":
                                 self._handle_authorization(fields)
-                            
+
                             # ✅ FIX #5: Handle STOP/RESUME commands from CENTRAL
-                            elif fields[0] == MessageTypes.STOP_COMMAND:
+                            elif fields[0] == "STOP_COMMAND":
                                 self._handle_stop_command()
-                            
-                            elif fields[0] == MessageTypes.RESUME_COMMAND:
+
+                            elif fields[0] == "RESUME_COMMAND":
                                 self._handle_resume_command()
 
-                            elif fields[0] == MessageTypes.END_SUPPLY:
+                            elif fields[0] == "END_SUPPLY":
                                 self._handle_end_supply()
 
                         else:
@@ -161,18 +161,18 @@ class EVCPEngine:
                 if is_valid:
                     fields = Protocol.parse_message(message)
 
-                    if fields[0] == MessageTypes.HEALTH_CHECK:
+                    if fields[0] == "HEALTH_CHECK":
                         # Respond to health check
                         if self.simulate_fault:
                             response = Protocol.encode(
                                 Protocol.build_message(
-                                    MessageTypes.HEALTH_KO, self.cp_id
+                                    "HEALTH_KO", self.cp_id
                                 )
                             )
                         else:
                             response = Protocol.encode(
                                 Protocol.build_message(
-                                    MessageTypes.HEALTH_OK, self.cp_id
+                                    "HEALTH_OK", self.cp_id
                                 )
                             )
                         self.monitor_socket.send(response)
@@ -214,7 +214,7 @@ class EVCPEngine:
                 # Notify CENTRAL of supply end
                 end_msg = Protocol.encode(
                     Protocol.build_message(
-                        MessageTypes.SUPPLY_END, self.cp_id, driver_id,
+                        "SUPPLY_END", self.cp_id, driver_id,
                         kwh_delivered, total_amount
                     )
                 )
@@ -251,7 +251,7 @@ class EVCPEngine:
                 # Notify CENTRAL of supply end
                 end_msg = Protocol.encode(
                     Protocol.build_message(
-                        MessageTypes.SUPPLY_END, self.cp_id, driver_id,
+                        "SUPPLY_END", self.cp_id, driver_id,
                         kwh_delivered, total_amount
                     )
                 )
@@ -293,7 +293,7 @@ class EVCPEngine:
                 # Notify CENTRAL
                 end_msg = Protocol.encode(
                     Protocol.build_message(
-                        MessageTypes.SUPPLY_END, self.cp_id, driver_id,
+                        "SUPPLY_END", self.cp_id, driver_id,
                         kwh_delivered, total_amount
                     )
                 )
@@ -317,7 +317,7 @@ class EVCPEngine:
                     # Always send state
                     heartbeat = Protocol.encode(
                         Protocol.build_message(
-                            MessageTypes.HEARTBEAT, self.cp_id, self.state
+                            "HEARTBEAT", self.cp_id, self.state
                         )
                     )
                     self.central_socket.send(heartbeat)
@@ -342,7 +342,7 @@ class EVCPEngine:
 
                         update_msg = Protocol.encode(
                             Protocol.build_message(
-                                MessageTypes.SUPPLY_UPDATE, self.cp_id,
+                                "SUPPLY_UPDATE", self.cp_id,
                                 round(power_kw, 2), amount
                             )
                         )
