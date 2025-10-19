@@ -1,4 +1,5 @@
-version: '3.8'
+# NOTE: The 'version' field is now deprecated in Compose V2, so we remove it.
+# Docker will automatically detect the format.
 
 services:
   # ============================================================================
@@ -26,7 +27,7 @@ services:
       KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
       KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
-      ALLOW_PLAINTEXT_LISTENER: yes
+      ALLOW_PLAINTEXT_LISTENER: "yes"
     ports:
       - "9092:9092"
     networks:
@@ -61,6 +62,7 @@ services:
     container_name: evcharging_cp_engine_1
     depends_on:
       - central
+      - kafka
     environment:
       KAFKA_BROKER: kafka:9092
     command: python charging_point/ev_cp_engine.py CP-001 40.5 -3.1 0.30 central 5000
@@ -79,11 +81,15 @@ services:
     depends_on:
       - central
       - cp_engine_1
+      - kafka
     environment:
       KAFKA_BROKER: kafka:9092
+    # 👇 Important: ensure monitor connects to the *engine's hostname*, not localhost
     command: python charging_point/ev_cp_monitor.py CP-001 cp_engine_1 6001 central 5000
     networks:
       - evcharging_net
+    stdin_open: true
+    tty: true
 
   # ============================================================================
   # Charging Point 2 - Engine + Monitor
@@ -95,6 +101,7 @@ services:
     container_name: evcharging_cp_engine_2
     depends_on:
       - central
+      - kafka
     environment:
       KAFKA_BROKER: kafka:9092
     command: python charging_point/ev_cp_engine.py CP-002 40.4 -3.2 0.35 central 5000
@@ -112,28 +119,38 @@ services:
     container_name: evcharging_cp_monitor_2
     depends_on:
       - cp_engine_2
+      - central
+      - kafka
     environment:
       KAFKA_BROKER: kafka:9092
-    command: python charging_point/ev_cp_monitor.py CP-002 cp_engine_2 6002 central 5000
+    command: python charging_point/ev_cp_monitor.py CP-002 evcharging_cp_engine_2 6002 central 5000
     networks:
       - evcharging_net
+    stdin_open: true
+    tty: true
 
   # ============================================================================
-  # Driver - AUTOMATED (processes file automatically)
+  # Driver - can be scaled later (no fixed name)
   # ============================================================================
   driver:
     build:
       context: .
       dockerfile: Dockerfile.driver
     depends_on:
+      - kafka 
       - central
     environment:
       KAFKA_BROKER: kafka:9092
-    command: python driver/ev_driver.py DRIVER-001 central 5000 data/charging_requests.txt
+    command: python driver/ev_driver.py DRIVER-001 central 5000 kafka
     networks:
       - evcharging_net
+    stdin_open: true
+    tty: true
+    # ⚠️ No container_name -> allows scaling
 
- 
+# ============================================================================
+# Network definition
+# ============================================================================
 networks:
   evcharging_net:
     driver: bridge
