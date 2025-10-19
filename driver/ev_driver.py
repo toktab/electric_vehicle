@@ -1,5 +1,5 @@
 # ============================================================================
-# EVCharging System - EV_Driver (Driver Application)
+# EVCharging System - EV_Driver (Driver Application) - MANUAL MODE ONLY
 # ============================================================================
 
 import socket
@@ -24,7 +24,7 @@ class EVDriver:
         self.running = True
         self.lock = threading.Lock()
 
-        # Driver state
+        # Driver state - ALWAYS START IDLE
         self.status = "IDLE"
         self.current_cp = None
         self.charge_amount = 0
@@ -115,18 +115,18 @@ class EVDriver:
         price = fields[4]
 
         with self.lock:
-            self.status = "AUTHORIZED"
+            self.status = "CHARGING"
             self.current_cp = cp_id
 
-        print(f"[{self.driver_id}] ✓ AUTHORIZED to charge at {cp_id}")
+        print(f"\n[{self.driver_id}] ✓ AUTHORIZED to charge at {cp_id}")
         print(f"    kWh needed: {kwh_needed}, Price: {price}€/kWh")
+        print(f"[{self.driver_id}] Vehicle plugged in automatically, starting supply...\n")
 
         self.kafka.publish_event("charging_logs", "DRIVER_AUTHORIZED", {
             "driver_id": self.driver_id,
             "cp_id": cp_id,
             "kwh_needed": kwh_needed
         })
-        print(f"[{self.driver_id}] Vehicle plugged in automatically, starting supply...")
 
     def _handle_denial(self, fields):
         """Handle charging denial from CENTRAL"""
@@ -135,10 +135,11 @@ class EVDriver:
         reason = fields[3] if len(fields) > 3 else "UNKNOWN"
 
         with self.lock:
-            self.status = "DENIED"
+            self.status = "IDLE"
+            self.current_cp = None
 
-        print(f"[{self.driver_id}] ✗ DENIED charging at {cp_id}")
-        print(f"    Reason: {reason}")
+        print(f"\n[{self.driver_id}] ✗ DENIED charging at {cp_id}")
+        print(f"    Reason: {reason}\n")
 
         self.kafka.publish_event("charging_logs", "DRIVER_DENIED", {
             "driver_id": self.driver_id,
@@ -154,16 +155,16 @@ class EVDriver:
         total_amount = fields[3] if len(fields) > 3 else "?"
 
         with self.lock:
-            self.status = "COMPLETED"
+            self.status = "IDLE"
             self.current_cp = None
 
-        print(f"\n{'='*50}")
+        print(f"\n{'='*60}")
         print(f"CHARGING TICKET - {self.driver_id}")
-        print(f"{'='*50}")
+        print(f"{'='*60}")
         print(f"Charging Point: {cp_id}")
         print(f"Energy: {total_kwh} kWh")
         print(f"Amount: {total_amount}€")
-        print(f"{'='*50}\n")
+        print(f"{'='*60}\n")
 
         self.kafka.publish_event("charging_logs", "DRIVER_TICKET", {
             "driver_id": self.driver_id,
@@ -182,31 +183,12 @@ class EVDriver:
         consumption_kw = fields[2]
         amount_euro = fields[3]
         
-        print(f"[{self.driver_id}] ⚡ Charging at {cp_id}: "
-            f"{consumption_kw} kW - {amount_euro}€")
-
-    def load_requests_from_file(self):
-        """Load charging requests from file"""
-        if not self.requests_file or not os.path.exists(self.requests_file):
-            print(f"[{self.driver_id}] No requests file found")
-            return
-
-        try:
-            with open(self.requests_file, 'r') as f:
-                for line in f:
-                    line = line.strip()
-                    if line and not line.startswith('#'):
-                        self.requests_queue.append(line)
-
-            print(f"[{self.driver_id}] Loaded {len(self.requests_queue)} requests from file")
-
-        except Exception as e:
-            print(f"[{self.driver_id}] Error loading requests: {e}")
+        print(f"[{self.driver_id}] ⚡ Charging: {consumption_kw} kW - {amount_euro}€")
 
     def request_charge(self, cp_id, kwh_needed=10):
         """Request charging from a specific CP"""
         if self.status != "IDLE":
-            print(f"[{self.driver_id}] Cannot request (status: {self.status})")
+            print(f"\n❌ Cannot request (status: {self.status})")
             return False
 
         with self.lock:
@@ -220,7 +202,7 @@ class EVDriver:
 
         try:
             self.central_socket.send(request_msg)
-            print(f"[{self.driver_id}] Requesting charge: CP {cp_id}, {kwh_needed} kWh")
+            print(f"\n[{self.driver_id}] 📤 Requesting charge: {cp_id}, {kwh_needed} kWh\n")
 
             self.kafka.publish_event("charging_logs", "CHARGE_REQUESTED", {
                 "driver_id": self.driver_id,
@@ -236,79 +218,77 @@ class EVDriver:
                 self.status = "IDLE"
             return False
 
-    def process_requests_from_file(self):
-        """Process requests from file sequentially"""
-        if not self.requests_queue:
-            return
-
-        for request_line in self.requests_queue:
-            # Parse line format: CP_ID,KWH_NEEDED
-            parts = request_line.split(',')
-            if len(parts) >= 2:
-                cp_id = parts[0].strip()
-                kwh_needed = float(parts[1].strip())
-
-                print(f"\n[{self.driver_id}] Processing request: {cp_id}, {kwh_needed} kWh")
-
-                self.request_charge(cp_id, kwh_needed)
-
-                # Wait for response (authorization or denial)
-                time.sleep(2)
-
-                # If charging completed, wait before next request
-                if self.status in ["COMPLETED", "DENIED"]:
-                    print(f"[{self.driver_id}] Waiting {WAIT_BETWEEN_REQUESTS}s before next request...")
-                    time.sleep(WAIT_BETWEEN_REQUESTS)
-
-                    with self.lock:
-                        self.status = "IDLE"
+    def finish_charging_manual(self):
+        """Manually unplug and go back to IDLE"""
+        if self.status != "CHARGING":
+            print(f"\n❌ Not currently charging (status: {self.status})")
+            return False
+        
+        with self.lock:
+            cp_id = self.current_cp
+            self.status = "IDLE"
+            self.current_cp = None
+        
+        print(f"\n✓ Unplugged from {cp_id}")
+        print(f"Status: IDLE\n")
+        return True
 
     def display_menu(self):
-        """Display interactive menu for driver"""
+        """Display interactive menu for driver - MANUAL MODE ONLY"""
         while self.running:
             try:
-                print(f"\n[{self.driver_id} MENU]")
-                print(f"Status: {self.status}")
+                print(f"\n{'='*60}")
+                print(f"[{self.driver_id} MENU] Status: {self.status}", end="")
                 if self.current_cp:
-                    print(f"At: {self.current_cp}")
-
+                    print(f" | At: {self.current_cp}\n", end="")
+                else:
+                    print("\n", end="")
+                print(f"{'='*60}")
                 print("\nOptions:")
-                print("1. Request charge (manual)")
-                print("2. View available CPs (would list from CENTRAL)")
-                print("3. Process file requests")
-                print("4. View status")
+                print("  1. Request charge")
+                print("  2. View status")
+                print("  3. View available CPs")
+                print("  4. Finish charging (unplug)")
+                print("  5. Exit")
+                print(f"{'='*60}")
 
-                choice = input("Choice (or press Enter to continue): ").strip()
+                choice = input("\nChoice (1-5): ").strip()
 
                 if choice == "1":
-                    # Reset status if previous charge completed
-                    if self.status in ["COMPLETED", "DENIED"]:
-                        with self.lock:
-                            self.status = "IDLE"
+                    if self.status != "IDLE":
+                        print(f"\n❌ Cannot request while {self.status}")
+                        continue
                     
-                    cp_id = input("Enter CP ID: ").strip()
+                    cp_id = input("Enter CP ID (e.g., CP-001): ").strip()
                     kwh_str = input("Enter kWh needed (default 10): ").strip()
-                    kwh = float(kwh_str) if kwh_str else 10
-                    self.request_charge(cp_id, kwh)
+                    try:
+                        kwh = float(kwh_str) if kwh_str else 10
+                        self.request_charge(cp_id, kwh)
+                    except ValueError:
+                        print("❌ Invalid kWh value")
 
                 elif choice == "2":
-                    print("\n(Available CPs would be displayed here)")
-                    print("(This is handled by CENTRAL monitoring)")
+                    print(f"\n  Status: {self.status}")
+                    print(f"  Current CP: {self.current_cp if self.current_cp else 'None'}\n")
 
                 elif choice == "3":
-                    if self.requests_queue:
-                        self.process_requests_from_file()
-                    else:
-                        print("No requests loaded")
+                    print("\n  Available Charging Points:")
+                    print("    - CP-001 (€0.30/kWh) at (40.5, -3.1)")
+                    print("    - CP-002 (€0.35/kWh) at (40.4, -3.2)\n")
 
                 elif choice == "4":
-                    print(f"Status: {self.status}")
-                    print(f"Current CP: {self.current_cp}")
+                    self.finish_charging_manual()
 
-                time.sleep(1)
+                elif choice == "5":
+                    print("\nExiting driver application...")
+                    self.running = False
+                    break
+
+                else:
+                    print("\n❌ Invalid choice. Please enter 1-5")
 
             except Exception as e:
-                print(f"Menu error: {e}")
+                print(f"\n❌ Menu error: {e}")
 
     def run(self):
         """Run the driver"""
@@ -316,17 +296,10 @@ class EVDriver:
             print(f"[{self.driver_id}] Cannot connect to CENTRAL")
             return
 
-        # Load requests from file if provided
-        if self.requests_file:
-            self.load_requests_from_file()
-            # Start processing requests automatically
-            requests_thread = threading.Thread(
-                target=self.process_requests_from_file,
-                daemon=True
-            )
-            requests_thread.start()
+        print(f"[{self.driver_id}] ✓ Connected to CENTRAL")
+        print(f"[{self.driver_id}] Ready for manual commands\n")
 
-        # Display menu
+        # Display menu only - NO automatic processing
         try:
             self.display_menu()
         except KeyboardInterrupt:
@@ -340,13 +313,12 @@ class EVDriver:
 
 if __name__ == "__main__":
     if len(sys.argv) < 2:
-        print("Usage: python ev_driver.py <DRIVER_ID> [central_host] [central_port] [requests_file]")
+        print("Usage: python ev_driver.py <DRIVER_ID> [central_host] [central_port]")
         sys.exit(1)
 
     driver_id = sys.argv[1]
     central_host = sys.argv[2] if len(sys.argv) > 2 else "localhost"
     central_port = int(sys.argv[3]) if len(sys.argv) > 3 else 5000
-    requests_file = sys.argv[4] if len(sys.argv) > 4 else None
 
-    driver = EVDriver(driver_id, central_host, central_port, requests_file)
+    driver = EVDriver(driver_id, central_host, central_port)
     driver.run()
