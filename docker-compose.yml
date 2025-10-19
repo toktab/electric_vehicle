@@ -84,7 +84,6 @@ services:
       - kafka
     environment:
       KAFKA_BROKER: kafka:9092
-    # 👇 Important: ensure monitor connects to the *engine's hostname*, not localhost
     command: python charging_point/ev_cp_monitor.py CP-001 cp_engine_1 6001 central 5000
     networks:
       - evcharging_net
@@ -130,13 +129,13 @@ services:
     tty: true
 
   # ============================================================================
-  # Driver - can be scaled later (no fixed name)
+  # Driver 1
   # ============================================================================
-  driver:
+  driver_1:
     build:
       context: .
       dockerfile: Dockerfile.driver
-    container_name: evcharging_driver
+    container_name: evcharging_driver_1
     depends_on:
       - kafka 
       - central
@@ -148,7 +147,26 @@ services:
       - evcharging_net
     stdin_open: true
     tty: true
-    # ⚠️ No container_name -> allows scaling
+
+  # ============================================================================
+  # Driver 2 - Additional driver for testing scalability
+  # ============================================================================
+  driver_2:
+    build:
+      context: .
+      dockerfile: Dockerfile.driver
+    container_name: evcharging_driver_2
+    depends_on:
+      - kafka 
+      - central
+    environment:
+      KAFKA_BROKER: kafka:9092
+    command: >
+      sh -c 'sleep 6 && python driver/ev_driver.py DRIVER-002 central 5000'
+    networks:
+      - evcharging_net
+    stdin_open: true
+    tty: true
 
 # ============================================================================
 # Network definition

@@ -1,3 +1,15 @@
+# Latest guide
+
+docker-compose down -v
+docker-compose build
+docker-compose up
+
+# In separate terminals:
+docker attach evcharging_driver_1
+docker attach evcharging_driver_2
+docker attach evcharging_central
+
+#OLD:
 # 1. Verify everything
 python setup_check.py
 
