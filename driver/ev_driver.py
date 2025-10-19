@@ -92,6 +92,9 @@ class EVDriver:
                             elif msg_type == MessageTypes.TICKET:
                                 self._handle_ticket(fields)
 
+                            elif msg_type == MessageTypes.AVAILABLE_CPS:
+                                self._handle_available_cps(fields)
+
                             elif msg_type == MessageTypes.SUPPLY_UPDATE:
                                 self._handle_supply_update(fields)
 
@@ -178,12 +181,29 @@ class EVDriver:
         # SUPPLY_UPDATE#cp_id#consumption_kw#amount_euro
         if len(fields) < 4:
             return
-        
+
         cp_id = fields[1]
         consumption_kw = fields[2]
         amount_euro = fields[3]
-        
+
         print(f"[{self.driver_id}] ⚡ Charging: {consumption_kw} kW - {amount_euro}€")
+
+    def _handle_available_cps(self, fields):
+        """Handle available CPs response from CENTRAL"""
+        # AVAILABLE_CPS#cp_id1#lat1#lon1#price1#cp_id2#lat2#lon2#price2...
+        if len(fields) < 2:
+            print(f"[{self.driver_id}] No available CPs")
+            return
+
+        print(f"\n[{self.driver_id}] Available Charging Points:")
+        for i in range(1, len(fields), 4):
+            if i + 3 < len(fields):
+                cp_id = fields[i]
+                lat = fields[i + 1]
+                lon = fields[i + 2]
+                price = fields[i + 3]
+                print(f"  - {cp_id} (€{price}/kWh) at ({lat}, {lon})")
+        print()
 
     def request_charge(self, cp_id, kwh_needed=10):
         """Request charging from a specific CP"""
@@ -223,15 +243,39 @@ class EVDriver:
         if self.status != "CHARGING":
             print(f"\n❌ Not currently charging (status: {self.status})")
             return False
-        
+
         with self.lock:
             cp_id = self.current_cp
-            self.status = "IDLE"
-            self.current_cp = None
-        
-        print(f"\n✓ Unplugged from {cp_id}")
-        print(f"Status: IDLE\n")
-        return True
+
+        # Send END_CHARGE to CENTRAL
+        end_charge_msg = Protocol.encode(
+            Protocol.build_message(MessageTypes.END_CHARGE, self.driver_id, cp_id)
+        )
+
+        try:
+            self.central_socket.send(end_charge_msg)
+            print(f"\n[{self.driver_id}] 📤 Sent manual end charge request for {cp_id}\n")
+
+            # Status will be updated when ticket is received
+            return True
+
+        except Exception as e:
+            print(f"[{self.driver_id}] Error sending end charge: {e}")
+            return False
+
+    def query_available_cps(self):
+        """Query available CPs from CENTRAL"""
+        query_msg = Protocol.encode(
+            Protocol.build_message(MessageTypes.QUERY_AVAILABLE_CPS, self.driver_id)
+        )
+
+        try:
+            self.central_socket.send(query_msg)
+            print(f"\n[{self.driver_id}] 📤 Querying available CPs...\n")
+            return True
+        except Exception as e:
+            print(f"[{self.driver_id}] Error sending query: {e}")
+            return False
 
     def display_menu(self):
         """Display interactive menu for driver - MANUAL MODE ONLY"""
@@ -272,9 +316,7 @@ class EVDriver:
                     print(f"  Current CP: {self.current_cp if self.current_cp else 'None'}\n")
 
                 elif choice == "3":
-                    print("\n  Available Charging Points:")
-                    print("    - CP-001 (€0.30/kWh) at (40.5, -3.1)")
-                    print("    - CP-002 (€0.35/kWh) at (40.4, -3.2)\n")
+                    self.query_available_cps()
 
                 elif choice == "4":
                     self.finish_charging_manual()

@@ -126,11 +126,17 @@ class EVCentral:
         elif msg_type == MessageTypes.REQUEST_CHARGE:
             self._handle_charge_request(fields, client_socket, client_id)
 
+        elif msg_type == MessageTypes.QUERY_AVAILABLE_CPS:
+            self._handle_query_available_cps(fields, client_socket, client_id)
+
         elif msg_type == MessageTypes.SUPPLY_UPDATE:
             self._handle_supply_update(fields, client_socket)
 
         elif msg_type == MessageTypes.SUPPLY_END:
             self._handle_supply_end(fields, client_socket)
+
+        elif msg_type == MessageTypes.END_CHARGE:
+            self._handle_end_charge(fields, client_socket, client_id)
 
         elif msg_type == MessageTypes.FAULT:
             self._handle_fault(fields, client_socket)
@@ -223,10 +229,10 @@ class EVCentral:
 
             cp = self.charging_points[cp_id]
 
-            if cp["state"] != CP_STATES["ACTIVATED"]:
+            if cp["state"] != CP_STATES["ACTIVATED"] or cp["current_driver"] is not None:
+                reason = f"CP_STATE_{cp['state']}" if cp["state"] != CP_STATES["ACTIVATED"] else "CP_ALREADY_IN_USE"
                 response = Protocol.encode(
-                    Protocol.build_message(MessageTypes.DENY, driver_id, cp_id,
-                                         f"CP_STATE_{cp['state']}")
+                    Protocol.build_message(MessageTypes.DENY, driver_id, cp_id, reason)
                 )
                 client_socket.send(response)
                 return
@@ -329,6 +335,68 @@ class EVCentral:
             "total_amount": total_amount
         })
 
+    def _handle_end_charge(self, fields, client_socket, client_id):
+        """Handle manual end charge from driver"""
+        # END_CHARGE#driver_id#cp_id
+        if len(fields) < 3:
+            return
+
+        driver_id = fields[1]
+        cp_id = fields[2]
+
+        with self.lock:
+            if cp_id in self.charging_points and self.charging_points[cp_id]["current_driver"] == driver_id:
+                cp = self.charging_points[cp_id]
+                session = cp.get("current_session", {})
+
+                # Calculate final amount based on current consumption
+                total_kwh = cp["consumption_kw"] / 3600 * time.time() - session.get("start_time", time.time()) if session else cp["consumption_kw"]
+                total_amount = round(total_kwh * float(cp["price_per_kwh"]), 2)
+
+                # End the supply
+                cp["state"] = CP_STATES["ACTIVATED"]
+                cp["current_driver"] = None
+                cp["consumption_kw"] = 0
+                cp["amount_euro"] = 0
+
+                self.drivers[driver_id]["status"] = "IDLE"
+                self.drivers[driver_id]["current_cp"] = None
+
+                # Send END_SUPPLY to CP to stop charging
+                if cp_id in self.entity_to_socket:
+                    try:
+                        end_supply_msg = Protocol.encode(
+                            Protocol.build_message(MessageTypes.END_SUPPLY, cp_id)
+                        )
+                        self.entity_to_socket[cp_id].send(end_supply_msg)
+                    except Exception as e:
+                        print(f"[EV_Central] Failed to send END_SUPPLY to {cp_id}: {e}")
+
+                ticket = f"=== TICKET ===\nCP: {cp_id}\nTotal: {total_amount}€\nkWh: {total_kwh}"
+                print(f"[EV_Central] Manual supply ended: {driver_id} at {cp_id}\n{ticket}")
+
+                # Send ticket to driver
+                if driver_id in self.entity_to_socket:
+                    try:
+                        ticket_msg = Protocol.encode(
+                            Protocol.build_message(
+                                MessageTypes.TICKET, cp_id, total_kwh, total_amount
+                            )
+                        )
+                        self.entity_to_socket[driver_id].send(ticket_msg)
+                        print(f"[EV_Central] Ticket sent to {driver_id}")
+                    except Exception as e:
+                        print(f"[EV_Central] Failed to send ticket to {driver_id}: {e}")
+
+                self.kafka.publish_event("charging_logs", "CHARGE_MANUALLY_ENDED", {
+                    "cp_id": cp_id,
+                    "driver_id": driver_id,
+                    "total_kwh": total_kwh,
+                    "total_amount": total_amount
+                })
+            else:
+                print(f"[EV_Central] Invalid end charge request from {driver_id} for {cp_id}")
+
     def _handle_heartbeat(self, fields, client_socket, client_id):
         """Handle heartbeat from CP"""
         # HEARTBEAT#cp_id#state
@@ -369,6 +437,40 @@ class EVCentral:
 
         print(f"[EV_Central] CP {cp_id} recovered")
         self.kafka.publish_event("system_events", "CP_RECOVERED", {"cp_id": cp_id})
+
+    def _handle_query_available_cps(self, fields, client_socket, client_id):
+        """Handle driver query for available CPs"""
+        # QUERY_AVAILABLE_CPS#driver_id
+        if len(fields) < 2:
+            return
+
+        driver_id = fields[1]
+
+        available_cps = []
+        with self.lock:
+            for cp_id, cp_data in self.charging_points.items():
+                if cp_data["state"] == CP_STATES["ACTIVATED"] and cp_data["current_driver"] is None:
+                    available_cps.append({
+                        "cp_id": cp_id,
+                        "location": cp_data["location"],
+                        "price_per_kwh": cp_data["price_per_kwh"]
+                    })
+
+        # Send list of available CPs to driver
+        # AVAILABLE_CPS#cp_id1#lat1#lon1#price1#cp_id2#lat2#lon2#price2...
+        response_fields = [MessageTypes.AVAILABLE_CPS]
+        for cp in available_cps:
+            response_fields.extend([
+                cp["cp_id"],
+                cp["location"][0],  # lat
+                cp["location"][1],  # lon
+                cp["price_per_kwh"]
+            ])
+
+        response = Protocol.encode(Protocol.build_message(*response_fields))
+        client_socket.send(response)
+
+        print(f"[EV_Central] Sent {len(available_cps)} available CPs to {driver_id}")
 
     def display_dashboard(self):
         """Display monitoring dashboard periodically"""

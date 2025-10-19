@@ -101,6 +101,8 @@ class MessageTypes:
 
     # DRIVER to CENTRAL
     REQUEST_CHARGE = "REQUEST_CHARGE"       # Driver requesting charge
+    QUERY_AVAILABLE_CPS = "QUERY_AVAILABLE_CPS"  # Driver querying available CPs
+    END_CHARGE = "END_CHARGE"               # Driver ending charge manually
     ACKNOWLEDGE = "ACKNOWLEDGE"             # Any acknowledgement
 
     # CENTRAL to CP
@@ -108,7 +110,11 @@ class MessageTypes:
     DENY = "DENY"                           # Denial for supply
     STOP_COMMAND = "STOP_COMMAND"          # Stop CP
     RESUME_COMMAND = "RESUME_COMMAND"      # Resume CP
+    END_SUPPLY = "END_SUPPLY"               # End supply session
     TICKET = "TICKET"                       # Final ticket
+
+    # CENTRAL to DRIVER
+    AVAILABLE_CPS = "AVAILABLE_CPS"         # List of available CPs
 
     # MONITOR to ENGINE
     HEALTH_CHECK = "HEALTH_CHECK"           # Health check request

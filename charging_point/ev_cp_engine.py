@@ -134,6 +134,9 @@ class EVCPEngine:
                             elif fields[0] == MessageTypes.RESUME_COMMAND:
                                 self._handle_resume_command()
 
+                            elif fields[0] == MessageTypes.END_SUPPLY:
+                                self._handle_end_supply()
+
                         else:
                             break
 
@@ -233,6 +236,35 @@ class EVCPEngine:
         with self.lock:
             self.state = CP_STATES["ACTIVATED"]
         print(f"[{self.cp_id}] Received RESUME command from CENTRAL - now activated")
+
+    def _handle_end_supply(self):
+        """Handle END_SUPPLY command from CENTRAL"""
+        with self.lock:
+            if self.state == CP_STATES["SUPPLYING"] and self.current_session:
+                driver_id = self.current_driver
+                session = self.current_session
+                kwh_delivered = session["kwh_delivered"]
+                total_amount = round(kwh_delivered * self.price_per_kwh, 2)
+
+                print(f"[{self.cp_id}] Supply ended by CENTRAL for {driver_id}")
+
+                # Notify CENTRAL of supply end
+                end_msg = Protocol.encode(
+                    Protocol.build_message(
+                        MessageTypes.SUPPLY_END, self.cp_id, driver_id,
+                        kwh_delivered, total_amount
+                    )
+                )
+                try:
+                    self.central_socket.send(end_msg)
+                except Exception as e:
+                    print(f"[{self.cp_id}] Error notifying supply end: {e}")
+
+                self.state = CP_STATES["ACTIVATED"]
+                self.current_driver = None
+                self.current_session = None
+            else:
+                print(f"[{self.cp_id}] No active supply to end")
 
     def start_charging(self, driver_id):
         """
