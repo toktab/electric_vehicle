@@ -24,7 +24,7 @@ services:
     environment:
       KAFKA_BROKER_ID: 1
       KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
-      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://192.168.56.1:9092
       KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
       ALLOW_PLAINTEXT_LISTENER: "yes"
@@ -65,7 +65,7 @@ services:
       - kafka
     environment:
       KAFKA_BROKER: kafka:9092
-    command: python charging_point/ev_cp_engine.py CP-001 40.5 -3.1 0.30 central 5000
+    command: python charging_point/ev_cp_engine.py CP-001 40.5 -3.1 0.30 192.168.56.1 5000
     ports:
       - "6001:6001"
     networks:
@@ -103,7 +103,7 @@ services:
       - kafka
     environment:
       KAFKA_BROKER: kafka:9092
-    command: python charging_point/ev_cp_engine.py CP-002 40.4 -3.2 0.35 central 5000
+    command: python charging_point/ev_cp_engine.py CP-002 40.4 -3.2 0.35 192.168.56.1 5000
     ports:
       - "6002:6002"
     networks:

@@ -3,7 +3,7 @@
 # ============================================================================
 
 # CENTRAL Configuration
-CENTRAL_HOST = "0.0.0.0"
+CENTRAL_HOST = "192.168.56.1"
 CENTRAL_PORT = 5000
 CENTRAL_DB_FILE = "central_db.txt"
 
