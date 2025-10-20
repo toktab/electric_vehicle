@@ -8,7 +8,7 @@ import time
 import sys
 from config import CP_BASE_PORT, HEALTH_CHECK_INTERVAL
 from shared.protocol import Protocol, MessageTypes
-from shared.kafka_client import KafkaClient
+
 
 central_host = 'central'
 central_port = 5000
@@ -41,9 +41,6 @@ class EVCPMonitor:
         self.engine_healthy = True
         self.consecutive_failures = 0
         self.failure_threshold = 3
-
-        # Kafka
-        self.kafka = KafkaClient(f"EV_CP_M_{cp_id}")
 
         print(f"[{self.cp_id} Monitor] Initializing...")
 
@@ -107,10 +104,7 @@ class EVCPMonitor:
                                         )
                                         self.central_socket.send(recovery_msg)
 
-                                        self.kafka.publish_event(
-                                            "system_events", "ENGINE_RECOVERED",
-                                            {"cp_id": self.cp_id}
-                                        )
+
 
                                     self.engine_healthy = True
                                     self.consecutive_failures = 0
@@ -149,10 +143,7 @@ class EVCPMonitor:
                     except Exception as e:
                         print(f"[{self.cp_id} Monitor] Failed to send fault: {e}")
 
-                    self.kafka.publish_event(
-                        "system_events", "ENGINE_FAULT",
-                        {"cp_id": self.cp_id}
-                    )
+
 
     def display_status(self):
         """Display monitor status periodically"""
@@ -182,7 +173,11 @@ class EVCPMonitor:
                     print(f"Consecutive failures: {self.consecutive_failures}")
 
                 elif choice == "2":
-                    print("(Note: Press 'y' in Engine menu to simulate fault)")
+                    # Simulate fault by setting consecutive_failures to threshold
+                    with self.lock:
+                        self.consecutive_failures = self.failure_threshold
+                        self._handle_engine_fault()
+                    print("Fault simulation triggered. Fault message sent to CENTRAL.")
 
                 elif choice == "3":
                     with self.lock:
@@ -231,7 +226,7 @@ class EVCPMonitor:
                 self.engine_socket.close()
             if self.central_socket:
                 self.central_socket.close()
-            self.kafka.close()
+
 
 
 if __name__ == "__main__":
