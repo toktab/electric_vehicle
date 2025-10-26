@@ -1,0 +1,648 @@
+================================================================================
+EVCharging System - COMPLETE DEPLOYMENT GUIDE
+================================================================================
+Date: January 2025
+Practice: SD - EVCharging Network Management
+Author: Tornike Tabagari
+
+This guide covers ALL deployment scenarios:
+1. Single Machine (Testing)
+2. Multi-Machine with VirtualBox (Evaluation)
+3. Multi-Machine with Physical PCs (Advanced)
+
+================================================================================
+SCENARIO 1: SINGLE MACHINE DEPLOYMENT (Testing & Development)
+================================================================================
+
+This is the EASIEST way to test everything works before multi-machine deployment.
+
+Prerequisites:
+--------------
+- Docker Desktop installed and running
+- 8GB RAM minimum
+- 20GB free disk space
+
+Step-by-Step Instructions:
+--------------------------
+
+STEP 1: Verify File Structure
+------------------------------
+Run the verification script:
+
+    python setup_check.py
+
+You should see all green checkmarks (✅).
+
+
+STEP 2: Update config.py for Localhost
+---------------------------------------
+Edit config.py:
+
+    CENTRAL_HOST = "0.0.0.0"
+    CENTRAL_PORT = 5000
+    KAFKA_BROKER = "kafka:9092"
+
+
+STEP 3: Clean Previous Runs
+----------------------------
+    docker-compose down -v
+    docker system prune -f
+
+
+STEP 4: Build All Containers
+-----------------------------
+    docker-compose build
+
+This takes 5-10 minutes the first time.
+
+
+STEP 5: Start the System
+-------------------------
+    docker-compose up
+
+You should see:
+- Zookeeper starting
+- Kafka starting
+- CENTRAL starting and showing dashboard
+- CP engines connecting
+- CP monitors connecting
+- Automated driver processing charging_requests.txt
+- Manual drivers waiting for commands
+
+
+STEP 6: Interact with Components
+---------------------------------
+Open NEW terminals for each:
+
+Terminal 1 - Watch CENTRAL admin commands:
+    docker attach evcharging_central
+    
+    Try commands:
+    - list (see all CPs)
+    - history (see charging history)
+    - stop CP-001 (stop a charging point)
+    - resume CP-001 (resume a charging point)
+
+Terminal 2 - Manual Driver 1:
+    docker attach evcharging_driver_1
+    
+    Menu options:
+    1. Request charge
+    2. View status
+    3. View available CPs
+    4. Finish charging
+    5. Exit
+
+Terminal 3 - Manual Driver 2:
+    docker attach evcharging_driver_2
+    
+    Same menu as Driver 1
+
+Terminal 4 - Watch logs:
+    docker logs -f evcharging_driver_auto
+
+
+STEP 7: Test Scenarios
+-----------------------
+Scenario A: Automated Charging
+- Watch driver_auto process all requests from charging_requests.txt
+- Each request waits 4 seconds
+- See real-time updates on CENTRAL dashboard
+
+Scenario B: Manual Charging
+- Attach to driver_1
+- Request charge: CP-001, 15 kWh
+- Watch charging happen
+- Unplug when done
+
+Scenario C: Stop/Resume CP
+- Attach to CENTRAL
+- Type: stop CP-001
+- Try to charge at CP-001 (should be denied)
+- Type: resume CP-001
+- Now charging works again
+
+Scenario D: Health Monitoring
+- Monitors check CP engines every second
+- Simulated faults cause OUT_OF_ORDER state
+
+
+STEP 8: View Persistent Data
+-----------------------------
+Check the files created:
+
+    cat data/charging_points.txt
+    cat data/drivers.txt
+    cat data/charging_history.txt
+
+These files persist between restarts!
+
+
+STEP 9: Stop Everything
+------------------------
+Press Ctrl+C in the docker-compose terminal, then:
+
+    docker-compose down
+
+
+================================================================================
+SCENARIO 2: MULTI-MACHINE with VirtualBox (RECOMMENDED for Practice)
+================================================================================
+
+This deploys components on separate VMs to demonstrate distributed architecture.
+
+Architecture:
+-------------
+- HOST MACHINE (Your PC): CENTRAL + Kafka + Zookeeper
+- VM1 (Debian): CP Engine 1 + CP Monitor 1
+- VM2 (Debian): CP Engine 2 + CP Monitor 2 + Driver
+
+Minimum 3 machines as required by practice specification.
+
+Prerequisites:
+--------------
+- VirtualBox installed
+- Debian 12 ISO downloaded (debian.org)
+- 16GB RAM on host machine
+- Host PC must allow VM network access
+
+================================================================================
+PART A: Setup VirtualBox VMs
+================================================================================
+
+STEP 1: Create VM1 (Debian-CP1)
+--------------------------------
+1. Open VirtualBox
+2. Click "New"
+3. Name: EVCharging-VM1
+4. Type: Linux
+5. Version: Debian (64-bit)
+6. RAM: 2048 MB
+7. Hard Disk: Create virtual disk, 20GB, VDI, Dynamically allocated
+8. Click "Create"
+
+9. NETWORK SETTINGS (CRITICAL):
+   - Select VM1 → Settings → Network
+   - Adapter 1: Bridged Adapter
+   - Name: [Your network card - usually first one]
+   - Click OK
+
+10. Mount Debian ISO:
+    - Select VM1 → Settings → Storage
+    - Controller IDE → Empty → Optical Drive
+    - Choose Debian ISO file
+    - Click OK
+
+11. Start VM and Install Debian:
+    - Graphical Install
+    - Language: English
+    - Location: Your country
+    - Keyboard: Your keyboard
+    - Hostname: evcharging-vm1
+    - Domain: (leave blank)
+    - Root password: root123
+    - User: evcharging
+    - Password: evcharging123
+    - Partitioning: Guided - use entire disk
+    - Software selection: SSH server, standard system utilities
+    - Grub: Yes, /dev/sda
+    - Finish and reboot
+
+
+STEP 2: Create VM2 (Debian-CP2)
+--------------------------------
+Repeat STEP 1 but:
+- Name: EVCharging-VM2
+- Hostname: evcharging-vm2
+- Same credentials
+
+
+STEP 3: Configure VMs After Installation
+-----------------------------------------
+For EACH VM (VM1 and VM2):
+
+1. Login (user: evcharging, password: evcharging123)
+
+2. Install Docker:
+   su -
+   (enter root password: root123)
+   
+   apt update
+   apt install -y docker.io docker-compose git curl net-tools
+   systemctl enable docker
+   systemctl start docker
+   usermod -aG docker evcharging
+   exit
+   
+3. Logout and login again for group changes to take effect
+
+4. Check Docker works:
+   docker run hello-world
+
+
+STEP 4: Find IP Addresses
+--------------------------
+This is CRITICAL for communication!
+
+ON HOST MACHINE (your PC):
+Windows:
+    ipconfig
+    Look for "IPv4 Address" of your main network adapter
+    Example: 192.168.1.100
+
+Linux/Mac:
+    ip addr show
+    Look for your main interface (usually eth0 or wlan0)
+    Example: 192.168.1.100
+
+ON VM1:
+    ip addr show
+    Look for IP address on eth0 or enp0s3
+    Example: 192.168.1.101
+
+ON VM2:
+    ip addr show
+    Example: 192.168.1.102
+
+WRITE DOWN THESE IPS:
+    HOST: _________________
+    VM1:  _________________
+    VM2:  _________________
+
+
+STEP 5: Test Network Connectivity
+----------------------------------
+ON HOST:
+    ping [VM1-IP]
+    ping [VM2-IP]
+
+ON VM1:
+    ping [HOST-IP]
+    ping [VM2-IP]
+
+ON VM2:
+    ping [HOST-IP]
+    ping [VM1-IP]
+
+All should respond! If not, check VirtualBox network settings.
+
+
+================================================================================
+PART B: Deploy Components on Each Machine
+================================================================================
+
+STEP 6: Deploy on HOST Machine (CENTRAL + Kafka)
+-------------------------------------------------
+
+1. Update config.py with your HOST IP:
+
+    CENTRAL_HOST = "192.168.1.100"  # ← YOUR HOST IP
+    CENTRAL_PORT = 5000
+    KAFKA_BROKER = "192.168.1.100:9092"  # ← YOUR HOST IP
+
+2. Create docker-compose-host.yml:
+
+---START FILE---
+services:
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.3.0
+    container_name: evcharging_zookeeper
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+    ports:
+      - "2181:2181"
+    network_mode: host
+
+  kafka:
+    image: confluentinc/cp-kafka:7.3.0
+    container_name: evcharging_kafka
+    depends_on:
+      - zookeeper
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: localhost:2181
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://192.168.1.100:9092
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+    ports:
+      - "9092:9092"
+    network_mode: host
+
+  central:
+    build:
+      context: .
+      dockerfile: Dockerfile.central
+    container_name: evcharging_central
+    depends_on:
+      - kafka
+    environment:
+      KAFKA_BROKER: 192.168.1.100:9092
+    ports:
+      - "5000:5000"
+    volumes:
+      - ./data:/app/data
+    network_mode: host
+    stdin_open: true
+    tty: true
+---END FILE---
+
+3. Build and start:
+    docker-compose -f docker-compose-host.yml build
+    docker-compose -f docker-compose-host.yml up -d
+
+4. Check it's running:
+    docker ps
+    docker logs evcharging_central
+
+5. Attach to see dashboard:
+    docker attach evcharging_central
+
+
+STEP 7: Deploy on VM1 (CP Engine 1 + Monitor 1)
+------------------------------------------------
+
+1. Copy project to VM1:
+   ON HOST:
+       scp -r EVCharging evcharging@192.168.1.101:/home/evcharging/
+
+   OR use git:
+   ON VM1:
+       git clone [your-repo-url]
+       cd EVCharging
+
+2. Create docker-compose-vm1.yml:
+
+---START FILE---
+services:
+  cp_engine_1:
+    build:
+      context: .
+      dockerfile: Dockerfile.cp
+    container_name: evcharging_cp_engine_1
+    environment:
+      KAFKA_BROKER: 192.168.1.100:9092
+    command: python charging_point/ev_cp_engine.py CP-001 40.5 -3.1 0.30 192.168.1.100 5000
+    ports:
+      - "6001:6001"
+    network_mode: host
+    stdin_open: true
+    tty: true
+
+  cp_monitor_1:
+    build:
+      context: .
+      dockerfile: Dockerfile.cp
+    container_name: evcharging_cp_monitor_1
+    depends_on:
+      - cp_engine_1
+    environment:
+      KAFKA_BROKER: 192.168.1.100:9092
+    command: python charging_point/ev_cp_monitor.py CP-001 localhost 6001 192.168.1.100 5000
+    network_mode: host
+---END FILE---
+
+3. Build and start:
+    docker-compose -f docker-compose-vm1.yml build
+    docker-compose -f docker-compose-vm1.yml up -d
+
+4. Check logs:
+    docker logs -f evcharging_cp_engine_1
+
+You should see: "Registered with CENTRAL"
+
+
+STEP 8: Deploy on VM2 (CP Engine 2 + Monitor 2 + Driver)
+---------------------------------------------------------
+
+1. Copy project to VM2 (same as VM1)
+
+2. Create docker-compose-vm2.yml:
+
+---START FILE---
+services:
+  cp_engine_2:
+    build:
+      context: .
+      dockerfile: Dockerfile.cp
+    container_name: evcharging_cp_engine_2
+    environment:
+      KAFKA_BROKER: 192.168.1.100:9092
+    command: python charging_point/ev_cp_engine.py CP-002 40.4 -3.2 0.35 192.168.1.100 5000
+    ports:
+      - "6002:6002"
+    network_mode: host
+    stdin_open: true
+    tty: true
+
+  cp_monitor_2:
+    build:
+      context: .
+      dockerfile: Dockerfile.cp
+    container_name: evcharging_cp_monitor_2
+    depends_on:
+      - cp_engine_2
+    environment:
+      KAFKA_BROKER: 192.168.1.100:9092
+    command: python charging_point/ev_cp_monitor.py CP-002 localhost 6002 192.168.1.100 5000
+    network_mode: host
+
+  driver_auto:
+    build:
+      context: .
+      dockerfile: Dockerfile.driver
+    container_name: evcharging_driver_auto
+    depends_on:
+      - cp_engine_2
+    environment:
+      KAFKA_BROKER: 192.168.1.100:9092
+    command: sh -c 'sleep 5 && python driver/ev_driver_auto.py DRIVER-AUTO 192.168.1.100 5000 data/charging_requests.txt'
+    volumes:
+      - ./data:/app/data
+    network_mode: host
+---END FILE---
+
+3. Build and start:
+    docker-compose -f docker-compose-vm2.yml build
+    docker-compose -f docker-compose-vm2.yml up -d
+
+4. Check logs:
+    docker logs -f evcharging_driver_auto
+
+
+STEP 9: Verify Multi-Machine Deployment
+----------------------------------------
+
+ON HOST - Check CENTRAL dashboard:
+    docker attach evcharging_central
+    
+You should see:
+    [CHARGING POINTS]
+      [GREEN] CP-001: ACTIVATED
+      [GREEN] CP-002: ACTIVATED
+
+    [DRIVERS]
+      DRIVER-AUTO: IDLE (or CHARGING)
+
+ON VM1 - Check CP1 is running:
+    docker logs evcharging_cp_engine_1
+    
+Should show: "Registered with CENTRAL"
+
+ON VM2 - Check CP2 and driver:
+    docker logs evcharging_cp_engine_2
+    docker logs evcharging_driver_auto
+
+CONGRATULATIONS! You now have a fully distributed system!
+
+
+STEP 10: Test Multi-Machine Communication
+------------------------------------------
+
+From HOST (CENTRAL):
+    docker attach evcharging_central
+    list              # See all CPs
+    history           # See charging sessions
+    stop CP-001       # Stop CP on VM1
+    resume CP-001     # Resume CP on VM1
+
+Watch the automated driver on VM2 process all charges!
+
+
+================================================================================
+SCENARIO 3: MULTI-MACHINE with Physical PCs
+================================================================================
+
+Same as VirtualBox but:
+
+1. Use real PCs on same network
+2. Each PC runs Docker
+3. Same IP discovery process
+4. Same deployment steps
+
+Example:
+    PC1 (Your laptop): 192.168.1.100 - CENTRAL + Kafka
+    PC2 (Friend's PC): 192.168.1.150 - CP1
+    PC3 (Lab PC):      192.168.1.200 - CP2 + Driver
+
+
+================================================================================
+TESTING CHECKLIST FOR EVALUATION
+================================================================================
+
+Minimum Requirements (Must Work):
+---------------------------------
+☐ Components deployed on 3+ different machines
+☐ CENTRAL shows real-time dashboard
+☐ CPs register and connect successfully
+☐ Automated driver processes file-based requests
+☐ Manual driver can request charges interactively
+☐ Real-time consumption updates display
+☐ Charging completes and tickets are issued
+☐ Stop/Resume commands work from CENTRAL
+☐ Health monitoring detects faults
+☐ Data persists in .txt files
+
+Advanced Features (Bonus):
+--------------------------
+☐ Multiple drivers charging simultaneously
+☐ CP fault simulation and recovery
+☐ Historical data viewable
+☐ Manual end charge by driver
+☐ Query available CPs functionality
+
+
+================================================================================
+TROUBLESHOOTING GUIDE
+================================================================================
+
+Problem: "Cannot connect to CENTRAL"
+Solution:
+    - Check firewall allows port 5000
+    - Verify IP addresses are correct
+    - Test with: telnet [CENTRAL-IP] 5000
+    - Check CENTRAL is actually running
+
+Problem: "Kafka connection failed"
+Solution:
+    - Kafka takes 30 seconds to start
+    - Wait and retry
+    - Check port 9092 is open
+
+Problem: "CP not showing on dashboard"
+Solution:
+    - Check CP logs: docker logs evcharging_cp_engine_1
+    - Verify CP connected to correct CENTRAL IP
+    - Check network connectivity
+
+Problem: "Driver not receiving updates"
+Solution:
+    - Check driver is CHARGING state
+    - Verify CENTRAL is forwarding messages
+    - Check entity_to_socket mapping in CENTRAL
+
+Problem: VMs can't ping each other
+Solution:
+    - Change network adapter to Bridged
+    - Restart VMs
+    - Check host firewall settings
+
+
+================================================================================
+QUICK REFERENCE COMMANDS
+================================================================================
+
+Docker Commands:
+    docker-compose build                 # Build all containers
+    docker-compose up                    # Start system
+    docker-compose up -d                 # Start in background
+    docker-compose down                  # Stop and remove
+    docker-compose down -v               # Stop and remove volumes
+    docker ps                            # List running containers
+    docker logs -f [container]           # Follow logs
+    docker attach [container]            # Attach to container
+    Ctrl+P, Ctrl+Q                       # Detach without stopping
+
+Network Commands:
+    ip addr show                         # Show IP (Linux)
+    ipconfig                             # Show IP (Windows)
+    ping [IP]                            # Test connectivity
+    telnet [IP] [PORT]                   # Test port open
+
+File Commands:
+    cat data/charging_history.txt       # View history
+    tail -f data/charging_history.txt   # Watch history live
+    ls -lah data/                        # List all data files
+
+
+================================================================================
+DELIVERY CHECKLIST
+================================================================================
+
+For Practice Submission:
+-----------------------
+☐ Source code of all modules
+☐ Dockerfile for each component
+☐ docker-compose.yml (or multiple for distributed)
+☐ config.py with correct settings
+☐ charging_requests.txt with test data
+☐ This deployment guide (COMPLETE-DEPLOYMENT-GUIDE.txt)
+☐ Screenshots showing:
+    - CENTRAL dashboard with multiple CPs
+    - Charging in progress
+    - Completed charging history
+    - Multi-machine deployment diagram
+☐ Correction Guide filled out
+
+
+================================================================================
+END OF GUIDE
+================================================================================
+
+Good luck with your practice evaluation! 🚀
+
+If you have questions:
+1. Check this guide first
+2. Review the practice specification document
+3. Ask your instructor
+
+Remember: Start with single-machine, then multi-machine!
