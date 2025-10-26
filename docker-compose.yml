@@ -47,6 +47,8 @@ services:
       KAFKA_BROKER: kafka:9092
     ports:
       - "5000:5000"
+    volumes:
+      - ./data:/app/data  # ←
     networks:
       - evcharging_net
     stdin_open: true
@@ -167,6 +169,26 @@ services:
       - evcharging_net
     stdin_open: true
     tty: true
+
+  # ============================================================================
+  # Auto Driver - Auto driver for testing
+  # ============================================================================
+  driver_auto:
+    build:
+      context: .
+      dockerfile: Dockerfile.driver
+    container_name: evcharging_driver_auto
+    depends_on:
+      - kafka 
+      - central
+    environment:
+      KAFKA_BROKER: kafka:9092
+    command: >
+      sh -c 'sleep 5 && python driver/ev_driver_auto.py DRIVER-AUTO central 5000 data/charging_requests.txt'
+    volumes:
+      - ./data:/app/data
+    networks:
+      - evcharging_net
 
 # ============================================================================
 # Network definition

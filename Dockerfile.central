@@ -1,6 +1,4 @@
-# ============================================================================
 # Dockerfile.central - EV_Central
-# ============================================================================
 FROM python:3.11-slim
 
 WORKDIR /app
@@ -13,6 +11,9 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY config.py .
 COPY shared/ shared/
 COPY central/ central/
+
+# Create data directory
+RUN mkdir -p /app/data
 
 ENV PYTHONUNBUFFERED=1
 
