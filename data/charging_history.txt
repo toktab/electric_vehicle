@@ -1,0 +1,2 @@
+{"timestamp": "2025-10-26T22:24:45.773910", "cp_id": "CP-002", "driver_id": "DRIVER-001", "kwh_delivered": 0.0, "total_amount": 0, "duration_seconds": 22}
+{"timestamp": "2025-10-26T23:28:55.078571", "cp_id": "CP-002", "driver_id": "DRIVER-001", "kwh_delivered": 0.0, "total_amount": 0, "duration_seconds": 4}

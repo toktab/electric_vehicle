@@ -1,5 +1,5 @@
 # ============================================================================
-# EVCharging System - EV_Central (Control Center) - WITH FILE STORAGE
+# EVCharging System - EV_Central (Control Center) - FIXED VERSION
 # ============================================================================
 
 import socket
@@ -300,7 +300,7 @@ class EVCentral:
                 print(f"[EV_Central] Failed to forward update to {driver_id}: {e}")
 
     def _handle_supply_end(self, fields, client_socket):
-        """Handle supply completion"""
+        """Handle supply completion from CP"""
         if len(fields) < 5:
             return
 
@@ -357,31 +357,82 @@ class EVCentral:
         })
 
     def _handle_end_charge(self, fields, client_socket, client_id):
-        """Handle manual end charge from driver"""
+        """Handle manual end charge from driver - FIXED"""
         if len(fields) < 3:
             return
 
         driver_id = fields[1]
         cp_id = fields[2]
 
-        with self.lock:
-            if cp_id in self.charging_points and self.charging_points[cp_id]["current_driver"] == driver_id:
-                cp = self.charging_points[cp_id]
-                
-                # Calculate final values
-                total_kwh = cp["consumption_kw"] / 3600 * 10  # Approximate
-                total_amount = cp["amount_euro"]
-                duration_seconds = int(time.time() - cp["session_start"]) if cp["session_start"] else 0
+        print(f"[EV_Central] 🔌 Driver {driver_id} manually ending charge at {cp_id}")
 
-                # Send END_SUPPLY to CP
-                if cp_id in self.entity_to_socket:
-                    try:
-                        end_supply_msg = Protocol.encode(
-                            Protocol.build_message(MessageTypes.END_SUPPLY, cp_id)
-                        )
-                        self.entity_to_socket[cp_id].send(end_supply_msg)
-                    except Exception as e:
-                        print(f"[EV_Central] Failed to send END_SUPPLY to {cp_id}: {e}")
+        total_kwh = 0
+        total_amount = 0
+        duration_seconds = 0
+
+        with self.lock:
+            if cp_id not in self.charging_points:
+                print(f"[EV_Central] ❌ CP {cp_id} not found")
+                return
+            
+            cp = self.charging_points[cp_id]
+            
+            if cp["current_driver"] != driver_id:
+                print(f"[EV_Central] ❌ Driver {driver_id} not charging at {cp_id}")
+                return
+
+            # Calculate final values from current session
+            total_kwh = cp["consumption_kw"] / 3600 * 10  # Approximate from power
+            total_amount = cp["amount_euro"]
+            duration_seconds = int(time.time() - cp["session_start"]) if cp["session_start"] else 0
+
+            # Update states immediately
+            cp["state"] = CP_STATES["ACTIVATED"]
+            cp["current_driver"] = None
+            cp["consumption_kw"] = 0
+            cp["amount_euro"] = 0
+            cp["session_start"] = None
+
+            if driver_id in self.drivers:
+                self.drivers[driver_id]["status"] = "IDLE"
+                self.drivers[driver_id]["current_cp"] = None
+
+        # Save to history
+        self.storage.save_charging_session(cp_id, driver_id, total_kwh, total_amount, duration_seconds)
+        self.storage.update_driver_stats(driver_id, total_amount)
+
+        print(f"[EV_Central] ✅ Manual end charge completed: {driver_id} @ {cp_id}")
+        print(f"[EV_Central]    → {total_kwh:.2f} kWh, {total_amount:.2f}€, {duration_seconds}s")
+
+        # Send END_SUPPLY to CP to notify it to stop
+        if cp_id in self.entity_to_socket:
+            try:
+                end_supply_msg = Protocol.encode(
+                    Protocol.build_message(MessageTypes.END_SUPPLY, cp_id)
+                )
+                self.entity_to_socket[cp_id].send(end_supply_msg)
+                print(f"[EV_Central] 📤 Sent END_SUPPLY to CP {cp_id}")
+            except Exception as e:
+                print(f"[EV_Central] ⚠️  Failed to send END_SUPPLY to {cp_id}: {e}")
+
+        # Send ticket to driver
+        if driver_id in self.entity_to_socket:
+            try:
+                ticket_msg = Protocol.encode(
+                    Protocol.build_message(MessageTypes.TICKET, cp_id, total_kwh, total_amount)
+                )
+                self.entity_to_socket[driver_id].send(ticket_msg)
+                print(f"[EV_Central] 📤 Sent ticket to driver {driver_id}")
+            except Exception as e:
+                print(f"[EV_Central] ⚠️  Failed to send ticket to {driver_id}: {e}")
+
+        self.kafka.publish_event("charging_logs", "CHARGE_MANUALLY_ENDED", {
+            "cp_id": cp_id,
+            "driver_id": driver_id,
+            "total_kwh": total_kwh,
+            "total_amount": total_amount,
+            "duration_seconds": duration_seconds
+        })
 
     def _handle_heartbeat(self, fields, client_socket, client_id):
         """Handle heartbeat from CP"""
@@ -393,7 +444,9 @@ class EVCentral:
 
         with self.lock:
             if cp_id in self.charging_points:
-                self.charging_points[cp_id]["state"] = state
+                # Only update state if not currently supplying (to avoid race conditions)
+                if self.charging_points[cp_id]["state"] != CP_STATES["SUPPLYING"]:
+                    self.charging_points[cp_id]["state"] = state
 
     def _handle_fault(self, fields, client_socket):
         """Handle fault notification from CP monitor"""
@@ -402,11 +455,52 @@ class EVCentral:
 
         cp_id = fields[1]
 
+        driver_id = None
+        was_supplying = False
+
         with self.lock:
             if cp_id in self.charging_points:
-                self.charging_points[cp_id]["state"] = CP_STATES["OUT_OF_ORDER"]
+                cp = self.charging_points[cp_id]
+                was_supplying = (cp["state"] == CP_STATES["SUPPLYING"])
+                driver_id = cp["current_driver"]
+                
+                # Update CP state
+                cp["state"] = CP_STATES["OUT_OF_ORDER"]
+                
+                # If was supplying, end the session
+                if was_supplying and driver_id:
+                    total_kwh = cp["consumption_kw"] / 3600 * 10
+                    total_amount = cp["amount_euro"]
+                    duration_seconds = int(time.time() - cp["session_start"]) if cp["session_start"] else 0
+                    
+                    # Save partial session
+                    self.storage.save_charging_session(cp_id, driver_id, total_kwh, total_amount, duration_seconds)
+                    self.storage.update_driver_stats(driver_id, total_amount)
+                    
+                    cp["current_driver"] = None
+                    cp["consumption_kw"] = 0
+                    cp["amount_euro"] = 0
+                    cp["session_start"] = None
+                    
+                    if driver_id in self.drivers:
+                        self.drivers[driver_id]["status"] = "IDLE"
+                        self.drivers[driver_id]["current_cp"] = None
 
         print(f"[EV_Central] ⚠️ FAULT reported for CP {cp_id}")
+        
+        if was_supplying and driver_id:
+            print(f"[EV_Central] ⚠️  Charging session interrupted for driver {driver_id}")
+            
+            # Notify driver of emergency termination
+            if driver_id in self.entity_to_socket:
+                try:
+                    fault_msg = Protocol.encode(
+                        Protocol.build_message(MessageTypes.DENY, driver_id, cp_id, "CP_FAULT_EMERGENCY_STOP")
+                    )
+                    self.entity_to_socket[driver_id].send(fault_msg)
+                except Exception as e:
+                    print(f"[EV_Central] Failed to notify driver of fault: {e}")
+        
         self.kafka.publish_event("system_events", "CP_FAULT", {"cp_id": cp_id})
 
     def _handle_recovery(self, fields, client_socket):
@@ -507,6 +601,8 @@ class EVCentral:
                         print("\n=== CHARGING POINTS ===")
                         for cp_id, cp_data in self.charging_points.items():
                             print(f"  {cp_id}: {cp_data['state']}")
+                            if cp_data["current_driver"]:
+                                print(f"    └─ Charging: {cp_data['current_driver']}")
                     continue
 
                 if cmd == "history":
@@ -532,21 +628,66 @@ class EVCentral:
                         continue
                     
                     cp_id = parts[1]
-                    if cp_id in self.entity_to_socket:
-                        with self.lock:
-                            if cp_id in self.charging_points:
-                                self.charging_points[cp_id]["state"] = CP_STATES["STOPPED"]
+                    
+                    driver_id = None
+                    was_charging = False
+                    
+                    with self.lock:
+                        if cp_id not in self.charging_points:
+                            print(f"❌ CP {cp_id} not found")
+                            continue
                         
+                        cp = self.charging_points[cp_id]
+                        was_charging = (cp["state"] == CP_STATES["SUPPLYING"])
+                        driver_id = cp["current_driver"]
+                        
+                        # If currently charging, end the session first
+                        if was_charging and driver_id:
+                            total_kwh = cp["consumption_kw"] / 3600 * 10
+                            total_amount = cp["amount_euro"]
+                            duration_seconds = int(time.time() - cp["session_start"]) if cp["session_start"] else 0
+                            
+                            # Save session
+                            self.storage.save_charging_session(cp_id, driver_id, total_kwh, total_amount, duration_seconds)
+                            self.storage.update_driver_stats(driver_id, total_amount)
+                            
+                            print(f"⚠️  Charging session at {cp_id} interrupted ({total_kwh:.2f} kWh, {total_amount:.2f}€)")
+                            
+                            # Update states
+                            cp["current_driver"] = None
+                            cp["consumption_kw"] = 0
+                            cp["amount_euro"] = 0
+                            cp["session_start"] = None
+                            
+                            if driver_id in self.drivers:
+                                self.drivers[driver_id]["status"] = "IDLE"
+                                self.drivers[driver_id]["current_cp"] = None
+                        
+                        # Set CP to STOPPED
+                        cp["state"] = CP_STATES["STOPPED"]
+                    
+                    # Send STOP command to CP
+                    if cp_id in self.entity_to_socket:
                         try:
                             stop_msg = Protocol.encode(
                                 Protocol.build_message(MessageTypes.STOP_COMMAND, cp_id)
                             )
                             self.entity_to_socket[cp_id].send(stop_msg)
                             print(f"✅ CP {cp_id} stopped")
+                            
+                            # Notify driver if was charging
+                            if was_charging and driver_id and driver_id in self.entity_to_socket:
+                                ticket_msg = Protocol.encode(
+                                    Protocol.build_message(MessageTypes.TICKET, cp_id, 
+                                                          total_kwh, total_amount)
+                                )
+                                self.entity_to_socket[driver_id].send(ticket_msg)
+                                print(f"📤 Ticket sent to driver {driver_id}")
+                                
                         except Exception as e:
                             print(f"❌ Failed to stop CP: {e}")
                     else:
-                        print(f"❌ CP {cp_id} not found or not connected")
+                        print(f"❌ CP {cp_id} not connected")
                     continue
 
                 if cmd.startswith("resume"):
