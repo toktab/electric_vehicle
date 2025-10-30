@@ -1,14 +1,16 @@
 # ============================================================================
 # EVCharging System - Shared Configuration
 # ============================================================================
+import os
 
 # CENTRAL Configuration
 CENTRAL_HOST = "0.0.0.0"
 CENTRAL_PORT = 5000
 CENTRAL_DB_FILE = "central_db.txt"
 
-# KAFKA Configuration
-KAFKA_BROKER = "kafka:9092"  # Change to "localhost:9092" if not using Docker
+# KAFKA Configuration - reads from environment variable or defaults to docker network
+KAFKA_BROKER = os.getenv("KAFKA_BROKER", "kafka:9092")
+
 KAFKA_TOPICS = {
     "system_events": "evcharging_system_events",
     "charging_logs": "evcharging_charging_logs",

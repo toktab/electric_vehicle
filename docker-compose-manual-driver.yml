@@ -1,18 +1,14 @@
-# manual-driver.yml
-# This YAML defines the manual driver service, a lightweight client for testing or manual control.
-# It connects to the central Kafka broker at 172.21.42.11:9092 to send commands or receive updates.
-# The service joins the shared external network 'distributed_net'.
-
 services:
-  manual-driver:
-    # Placeholder for the manual driver service image (add build or image as needed)
-    image: python:3.9-slim  # Example base image; replace with actual service image
-    container_name: manual_driver
+  driver_1:
+    build:
+      context: .
+      dockerfile: Dockerfile.driver
+    container_name: manual_driver_1
     environment:
-      KAFKA_BROKER: 172.21.42.11:9092
-    networks:
-      - distributed_net
-
-networks:
-  distributed_net:
-    external: true
+      KAFKA_BROKER: 172.21.42.11:9092  # <-- HOST PC IP
+    command: python driver/ev_driver.py DRIVER-001 172.21.42.11 5000
+    #                                               ^^^^^^^^^^^^
+    #                                               HOST PC IP
+    network_mode: host
+    stdin_open: true
+    tty: true

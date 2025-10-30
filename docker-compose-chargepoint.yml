@@ -1,30 +1,32 @@
-# chargepoint.yml
-# This YAML defines the services for a single chargepoint: engine and monitor.
-# Both services connect to the central Kafka broker at 172.21.42.11:9092.
-# The engine handles charging logic, and the monitor oversees the engine's operations.
-# Services join the shared external network 'distributed_net' to communicate with central Kafka.
-
 services:
-  engine:
-    # Placeholder for the engine service image (add build or image as needed)
-    image: python:3.9-slim  # Example base image; replace with actual service image
-    container_name: chargepoint_engine
+  cp_engine_1:
+    build:
+      context: .
+      dockerfile: Dockerfile.cp
+    container_name: chargepoint_engine_1
     environment:
-      KAFKA_BROKER: 172.21.42.11:9092
-    networks:
-      - distributed_net
+      KAFKA_BROKER: 172.21.42.11:9092  # <-- HOST PC IP
+    command: python charging_point/ev_cp_engine.py CP-001 40.5 -3.1 0.30 172.21.42.11 5000
+    #                                                                    ^^^^^^^^^^^^
+    #                                                                    HOST PC IP
+    ports:
+      - "6001:6001"
+    network_mode: host
+    stdin_open: true
+    tty: true
 
-  monitor:
-    # Placeholder for the monitor service image (add build or image as needed)
-    image: python:3.9-slim  # Example base image; replace with actual service image
-    container_name: chargepoint_monitor
+  cp_monitor_1:
+    build:
+      context: .
+      dockerfile: Dockerfile.cp
+    container_name: chargepoint_monitor_1
     depends_on:
-      - engine
+      - cp_engine_1
     environment:
-      KAFKA_BROKER: 172.21.42.11:9092
-    networks:
-      - distributed_net
-
-networks:
-  distributed_net:
-    external: true
+      KAFKA_BROKER: 172.21.42.11:9092  # <-- HOST PC IP
+    command: python charging_point/ev_cp_monitor.py CP-001 localhost 6001 172.21.42.11 5000
+    #                                                                      ^^^^^^^^^^^^
+    #                                                                      HOST PC IP
+    network_mode: host
+    stdin_open: true
+    tty: true
