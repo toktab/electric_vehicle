@@ -278,6 +278,8 @@ class EVDriver:
 
         with self.lock:
             cp_id = self.current_cp
+            self.status = "IDLE"
+            self.current_cp = None
 
         # Send END_CHARGE to CENTRAL
         end_charge_msg = Protocol.encode(
