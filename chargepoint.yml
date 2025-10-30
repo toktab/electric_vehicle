@@ -1,0 +1,30 @@
+# chargepoint.yml
+# This YAML defines the services for a single chargepoint: engine and monitor.
+# Both services connect to the central Kafka broker at 172.21.42.11:9092.
+# The engine handles charging logic, and the monitor oversees the engine's operations.
+# Services join the shared external network 'distributed_net' to communicate with central Kafka.
+
+services:
+  engine:
+    # Placeholder for the engine service image (add build or image as needed)
+    image: python:3.9-slim  # Example base image; replace with actual service image
+    container_name: chargepoint_engine
+    environment:
+      KAFKA_BROKER: 172.21.42.11:9092
+    networks:
+      - distributed_net
+
+  monitor:
+    # Placeholder for the monitor service image (add build or image as needed)
+    image: python:3.9-slim  # Example base image; replace with actual service image
+    container_name: chargepoint_monitor
+    depends_on:
+      - engine
+    environment:
+      KAFKA_BROKER: 172.21.42.11:9092
+    networks:
+      - distributed_net
+
+networks:
+  distributed_net:
+    external: true
