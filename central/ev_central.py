@@ -1,5 +1,5 @@
 # ============================================================================
-# EVCharging System - EV_Central (Control Center) - FIXED VERSION
+# EVCharging System - EV_Central (Control Center) - FIXED kWh TRACKING
 # ============================================================================
 
 import socket
@@ -52,11 +52,11 @@ class EVCentral:
             for cp_data in stored_cps:
                 cp_id = cp_data['cp_id']
                 self.charging_points[cp_id] = {
-                    "state": CP_STATES["DISCONNECTED"],  # Will update when CP connects
+                    "state": CP_STATES["DISCONNECTED"],
                     "location": (cp_data['latitude'], cp_data['longitude']),
                     "price_per_kwh": cp_data['price_per_kwh'],
                     "current_driver": None,
-                    "consumption_kw": 0,
+                    "kwh_delivered": 0,  # ✅ FIXED: Track actual kWh delivered
                     "amount_euro": 0,
                     "session_start": None
                 }
@@ -168,7 +168,6 @@ class EVCentral:
         entity_id = fields[2]
 
         if entity_type == "CP":
-            # CP registration: REGISTER#CP#cp_id#latitude#longitude#price_per_kwh
             lat = fields[3] if len(fields) > 3 else "0"
             lon = fields[4] if len(fields) > 4 else "0"
             price = fields[5] if len(fields) > 5 else "0.30"
@@ -180,14 +179,13 @@ class EVCentral:
                     "price_per_kwh": price,
                     "connected_at": datetime.now().isoformat(),
                     "current_driver": None,
-                    "consumption_kw": 0,
+                    "kwh_delivered": 0,  # ✅ FIXED
                     "amount_euro": 0,
                     "session_start": None
                 }
                 
                 self.entity_to_socket[entity_id] = client_socket
 
-            # Save to file
             self.storage.save_cp(entity_id, lat, lon, price, CP_STATES["ACTIVATED"])
 
             print(f"[EV_Central] ✅ CP Registered: {entity_id} at ({lat}, {lon}) - Saved to file")
@@ -204,7 +202,6 @@ class EVCentral:
             client_socket.send(response)
 
         elif entity_type == "DRIVER":
-            # Driver registration: REGISTER#DRIVER#driver_id
             with self.lock:
                 self.drivers[entity_id] = {
                     "status": "IDLE",
@@ -214,7 +211,6 @@ class EVCentral:
                 
                 self.entity_to_socket[entity_id] = client_socket
 
-            # Save to file
             self.storage.save_driver(entity_id, "IDLE")
 
             print(f"[EV_Central] ✅ Driver Registered: {entity_id} - Saved to file")
@@ -234,7 +230,6 @@ class EVCentral:
         kwh_needed = fields[3]
 
         with self.lock:
-            # Validate CP exists and is available
             if cp_id not in self.charging_points:
                 response = Protocol.encode(
                     Protocol.build_message(MessageTypes.DENY, driver_id, cp_id, "CP_NOT_FOUND")
@@ -256,12 +251,14 @@ class EVCentral:
             cp["state"] = CP_STATES["SUPPLYING"]
             cp["current_driver"] = driver_id
             cp["session_start"] = time.time()
+            cp["kwh_delivered"] = 0  # ✅ FIXED: Reset kWh counter
+            cp["amount_euro"] = 0
+            
             self.drivers[driver_id]["status"] = "CHARGING"
             self.drivers[driver_id]["current_cp"] = cp_id
 
         print(f"[EV_Central] ✅ Charge authorized: Driver {driver_id} → CP {cp_id}")
 
-        # Send authorization to driver
         response = Protocol.encode(
             Protocol.build_message(MessageTypes.AUTHORIZE, driver_id, cp_id, kwh_needed, cp["price_per_kwh"])
         )
@@ -279,13 +276,13 @@ class EVCentral:
             return
 
         cp_id = fields[1]
-        consumption = float(fields[2])
+        kwh_increment = float(fields[2])  # ✅ FIXED: This is kWh added this second
         amount = float(fields[3])
 
         driver_id = None
         with self.lock:
             if cp_id in self.charging_points:
-                self.charging_points[cp_id]["consumption_kw"] = consumption
+                self.charging_points[cp_id]["kwh_delivered"] += kwh_increment  # ✅ FIXED: Accumulate kWh
                 self.charging_points[cp_id]["amount_euro"] = amount
                 driver_id = self.charging_points[cp_id]["current_driver"]
 
@@ -293,7 +290,7 @@ class EVCentral:
         if driver_id and driver_id in self.entity_to_socket:
             try:
                 update_msg = Protocol.encode(
-                    Protocol.build_message(MessageTypes.SUPPLY_UPDATE, cp_id, consumption, amount)
+                    Protocol.build_message(MessageTypes.SUPPLY_UPDATE, cp_id, kwh_increment, amount)
                 )
                 self.entity_to_socket[driver_id].send(update_msg)
             except Exception as e:
@@ -315,13 +312,12 @@ class EVCentral:
             if cp_id in self.charging_points:
                 cp = self.charging_points[cp_id]
                 
-                # Calculate duration
                 if cp["session_start"]:
                     duration_seconds = int(time.time() - cp["session_start"])
                 
                 cp["state"] = CP_STATES["ACTIVATED"]
                 cp["current_driver"] = None
-                cp["consumption_kw"] = 0
+                cp["kwh_delivered"] = 0  # ✅ FIXED: Reset
                 cp["amount_euro"] = 0
                 cp["session_start"] = None
 
@@ -329,17 +325,13 @@ class EVCentral:
                 self.drivers[driver_id]["status"] = "IDLE"
                 self.drivers[driver_id]["current_cp"] = None
 
-        # Save to history file
         self.storage.save_charging_session(cp_id, driver_id, total_kwh, total_amount, duration_seconds)
-        
-        # Update driver stats
         self.storage.update_driver_stats(driver_id, total_amount)
 
         ticket = f"=== CHARGING COMPLETED ===\nCP: {cp_id}\nDriver: {driver_id}\nEnergy: {total_kwh} kWh\nCost: {total_amount}€\nDuration: {duration_seconds}s"
         print(f"[EV_Central] {ticket}")
         print(f"[EV_Central] ✅ Session saved to charging_history.txt")
 
-        # Send ticket to driver
         if driver_id in self.entity_to_socket:
             try:
                 ticket_msg = Protocol.encode(
@@ -357,7 +349,7 @@ class EVCentral:
         })
 
     def _handle_end_charge(self, fields, client_socket, client_id):
-        """Handle manual end charge from driver - FIXED"""
+        """Handle manual end charge from driver"""
         if len(fields) < 3:
             return
 
@@ -381,15 +373,15 @@ class EVCentral:
                 print(f"[EV_Central] ❌ Driver {driver_id} not charging at {cp_id}")
                 return
 
-            # Calculate final values from current session
-            total_kwh = cp["consumption_kw"] / 3600 * 10  # Approximate from power
+            # ✅ FIXED: Use accumulated kWh
+            total_kwh = cp["kwh_delivered"]
             total_amount = cp["amount_euro"]
             duration_seconds = int(time.time() - cp["session_start"]) if cp["session_start"] else 0
 
             # Update states immediately
             cp["state"] = CP_STATES["ACTIVATED"]
             cp["current_driver"] = None
-            cp["consumption_kw"] = 0
+            cp["kwh_delivered"] = 0
             cp["amount_euro"] = 0
             cp["session_start"] = None
 
@@ -397,14 +389,12 @@ class EVCentral:
                 self.drivers[driver_id]["status"] = "IDLE"
                 self.drivers[driver_id]["current_cp"] = None
 
-        # Save to history
         self.storage.save_charging_session(cp_id, driver_id, total_kwh, total_amount, duration_seconds)
         self.storage.update_driver_stats(driver_id, total_amount)
 
         print(f"[EV_Central] ✅ Manual end charge completed: {driver_id} @ {cp_id}")
         print(f"[EV_Central]    → {total_kwh:.2f} kWh, {total_amount:.2f}€, {duration_seconds}s")
 
-        # Send END_SUPPLY to CP to notify it to stop
         if cp_id in self.entity_to_socket:
             try:
                 end_supply_msg = Protocol.encode(
@@ -415,7 +405,6 @@ class EVCentral:
             except Exception as e:
                 print(f"[EV_Central] ⚠️  Failed to send END_SUPPLY to {cp_id}: {e}")
 
-        # Send ticket to driver
         if driver_id in self.entity_to_socket:
             try:
                 ticket_msg = Protocol.encode(
@@ -444,7 +433,6 @@ class EVCentral:
 
         with self.lock:
             if cp_id in self.charging_points:
-                # Only update state if not currently supplying (to avoid race conditions)
                 if self.charging_points[cp_id]["state"] != CP_STATES["SUPPLYING"]:
                     self.charging_points[cp_id]["state"] = state
 
@@ -464,21 +452,19 @@ class EVCentral:
                 was_supplying = (cp["state"] == CP_STATES["SUPPLYING"])
                 driver_id = cp["current_driver"]
                 
-                # Update CP state
                 cp["state"] = CP_STATES["OUT_OF_ORDER"]
                 
-                # If was supplying, end the session
                 if was_supplying and driver_id:
-                    total_kwh = cp["consumption_kw"] / 3600 * 10
+                    # ✅ FIXED: Use accumulated kWh
+                    total_kwh = cp["kwh_delivered"]
                     total_amount = cp["amount_euro"]
                     duration_seconds = int(time.time() - cp["session_start"]) if cp["session_start"] else 0
                     
-                    # Save partial session
                     self.storage.save_charging_session(cp_id, driver_id, total_kwh, total_amount, duration_seconds)
                     self.storage.update_driver_stats(driver_id, total_amount)
                     
                     cp["current_driver"] = None
-                    cp["consumption_kw"] = 0
+                    cp["kwh_delivered"] = 0
                     cp["amount_euro"] = 0
                     cp["session_start"] = None
                     
@@ -491,7 +477,6 @@ class EVCentral:
         if was_supplying and driver_id:
             print(f"[EV_Central] ⚠️  Charging session interrupted for driver {driver_id}")
             
-            # Notify driver of emergency termination
             if driver_id in self.entity_to_socket:
                 try:
                     fault_msg = Protocol.encode(
@@ -567,8 +552,8 @@ class EVCentral:
                         print(f"  [{color}] {cp_id}: {cp_data['state']}")
                         if cp_data["state"] == CP_STATES["SUPPLYING"]:
                             print(f"      Driver: {cp_data['current_driver']}")
-                            print(f"      Power: {cp_data['consumption_kw']} kW")
-                            print(f"      Amount: {cp_data['amount_euro']}€")
+                            print(f"      kWh: {cp_data['kwh_delivered']:.2f} kWh")  # ✅ FIXED
+                            print(f"      Amount: {cp_data['amount_euro']:.2f}€")
 
                 print("\n[DRIVERS]")
                 if not self.drivers:
@@ -641,21 +626,19 @@ class EVCentral:
                         was_charging = (cp["state"] == CP_STATES["SUPPLYING"])
                         driver_id = cp["current_driver"]
                         
-                        # If currently charging, end the session first
                         if was_charging and driver_id:
-                            total_kwh = cp["consumption_kw"] / 3600 * 10
+                            # ✅ FIXED: Use accumulated kWh
+                            total_kwh = cp["kwh_delivered"]
                             total_amount = cp["amount_euro"]
                             duration_seconds = int(time.time() - cp["session_start"]) if cp["session_start"] else 0
                             
-                            # Save session
                             self.storage.save_charging_session(cp_id, driver_id, total_kwh, total_amount, duration_seconds)
                             self.storage.update_driver_stats(driver_id, total_amount)
                             
                             print(f"⚠️  Charging session at {cp_id} interrupted ({total_kwh:.2f} kWh, {total_amount:.2f}€)")
                             
-                            # Update states
                             cp["current_driver"] = None
-                            cp["consumption_kw"] = 0
+                            cp["kwh_delivered"] = 0
                             cp["amount_euro"] = 0
                             cp["session_start"] = None
                             
@@ -663,10 +646,8 @@ class EVCentral:
                                 self.drivers[driver_id]["status"] = "IDLE"
                                 self.drivers[driver_id]["current_cp"] = None
                         
-                        # Set CP to STOPPED
                         cp["state"] = CP_STATES["STOPPED"]
                     
-                    # Send STOP command to CP
                     if cp_id in self.entity_to_socket:
                         try:
                             stop_msg = Protocol.encode(
@@ -675,7 +656,6 @@ class EVCentral:
                             self.entity_to_socket[cp_id].send(stop_msg)
                             print(f"✅ CP {cp_id} stopped")
                             
-                            # Notify driver if was charging
                             if was_charging and driver_id and driver_id in self.entity_to_socket:
                                 ticket_msg = Protocol.encode(
                                     Protocol.build_message(MessageTypes.TICKET, cp_id, 

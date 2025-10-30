@@ -1,5 +1,5 @@
 # ============================================================================
-# EVCharging System - EV_CP_E (Charging Point Engine) - COMPLETE FINAL VERSION
+# EVCharging System - EV_CP_E (Charging Point Engine) - FIXED kWh INCREMENT
 # ============================================================================
 
 import socket
@@ -28,7 +28,7 @@ class EVCPEngine:
 
         self.state = CP_STATES["ACTIVATED"]
         self.current_driver = None
-        self.current_session = None  # {driver_id, start_time, kwh, amount}
+        self.current_session = None
 
         self.central_socket = None
         self.monitor_socket = None
@@ -267,10 +267,7 @@ class EVCPEngine:
                 print(f"[{self.cp_id}] No active supply to end")
 
     def start_charging(self, driver_id):
-        """
-        Simulate driver plugging vehicle into CP
-        Called via menu or external trigger
-        """
+        """Simulate driver plugging vehicle into CP"""
         with self.lock:
             if self.state == CP_STATES["SUPPLYING"] and self.current_driver == driver_id:
                 print(f"[{self.cp_id}] Driver {driver_id} plugged in, starting supply")
@@ -327,9 +324,9 @@ class EVCPEngine:
                         session = self.current_session
                         elapsed = time.time() - session["start_time"]
 
-                        # Simulate charging (10 kW power)
+                        # ✅ FIXED: Calculate kWh increment for this second
                         power_kw = 10
-                        kwh_this_second = power_kw / 3600  # 10 kW for 1 second
+                        kwh_this_second = power_kw / 3600  # 10 kW for 1 second = 0.00278 kWh
                         session["kwh_delivered"] += kwh_this_second
 
                         # Stop if reached target
@@ -340,15 +337,16 @@ class EVCPEngine:
 
                         amount = round(session["kwh_delivered"] * self.price_per_kwh, 2)
 
+                        # ✅ FIXED: Send kWh increment, not power
                         update_msg = Protocol.encode(
                             Protocol.build_message(
                                 "SUPPLY_UPDATE", self.cp_id,
-                                round(power_kw, 2), amount
+                                round(kwh_this_second, 6), amount  # Send increment
                             )
                         )
                         self.central_socket.send(update_msg)
 
-                        print(f"[{self.cp_id}] Charging: {session['kwh_delivered']:.2f} kWh, "
+                        print(f"[{self.cp_id}] Charging: {session['kwh_delivered']:.3f} kWh, "
                               f"{amount}€")
 
             except Exception as e:
