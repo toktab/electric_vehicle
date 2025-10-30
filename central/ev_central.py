@@ -170,7 +170,7 @@ class EVCentral:
         if entity_type == "CP":
             lat = fields[3] if len(fields) > 3 else "0"
             lon = fields[4] if len(fields) > 4 else "0"
-            price = fields[5] if len(fields) > 5 else "0.30"
+            price = float(fields[5]) if len(fields) > 5 else 0.30
 
             with self.lock:
                 self.charging_points[entity_id] = {
