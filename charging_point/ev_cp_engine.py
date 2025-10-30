@@ -1,5 +1,5 @@
 # ============================================================================
-# EVCharging System - EV_CP_E (Charging Point Engine) - FIXED kWh INCREMENT
+# EVCharging System - EV_CP_E (Charging Point Engine) - FIXED MONEY CALCULATION
 # ============================================================================
 
 import socket
@@ -127,7 +127,6 @@ class EVCPEngine:
                             if fields[0] == "AUTHORIZE":
                                 self._handle_authorization(fields)
 
-                            # ✅ FIX #5: Handle STOP/RESUME commands from CENTRAL
                             elif fields[0] == "STOP_COMMAND":
                                 self._handle_stop_command()
 
@@ -194,13 +193,12 @@ class EVCPEngine:
                     "driver_id": driver_id,
                     "start_time": time.time(),
                     "kwh_needed": kwh_needed,
-                    "kwh_delivered": 0,
-                    "amount": 0
+                    "kwh_delivered": 0.0,  # ✅ Ensure float
+                    "amount": 0.0           # ✅ Ensure float
                 }
 
                 print(f"[{self.cp_id}] Charging authorized for {driver_id}")
 
-    # ✅ FIX #5: Handle STOP command from CENTRAL
     def _handle_stop_command(self):
         """Handle STOP command from CENTRAL"""
         with self.lock:
@@ -230,7 +228,6 @@ class EVCPEngine:
         
         print(f"[{self.cp_id}] Received STOP command from CENTRAL - now stopped")
 
-    # ✅ FIX #5: Handle RESUME command from CENTRAL
     def _handle_resume_command(self):
         """Handle RESUME command from CENTRAL"""
         with self.lock:
@@ -322,11 +319,12 @@ class EVCPEngine:
                     # If charging, send detailed update
                     if self.state == CP_STATES["SUPPLYING"] and self.current_session:
                         session = self.current_session
-                        elapsed = time.time() - session["start_time"]
 
-                        # ✅ FIXED: Calculate kWh increment for this second
-                        power_kw = 10
-                        kwh_this_second = power_kw / 3600  # 10 kW for 1 second = 0.00278 kWh
+                        # ✅ FIX: Calculate kWh increment for this second
+                        power_kw = 10.0  # 10 kW charging power
+                        kwh_this_second = power_kw / 3600.0  # Convert to kWh per second
+                        
+                        # Add to accumulated kWh
                         session["kwh_delivered"] += kwh_this_second
 
                         # Stop if reached target
@@ -334,20 +332,25 @@ class EVCPEngine:
                             session["kwh_delivered"] = session["kwh_needed"]
                             print(f"[{self.cp_id}] Target reached, auto-stopping...")
                             self.stop_charging()
+                            continue
 
-                        amount = round(session["kwh_delivered"] * self.price_per_kwh, 2)
+                        # ✅ FIX: Calculate amount based on ACCUMULATED kWh
+                        amount = session["kwh_delivered"] * self.price_per_kwh
+                        session["amount"] = amount  # Store for reference
 
-                        # ✅ FIXED: Send kWh increment, not power
+                        # ✅ FIX: Send increment AND total amount
                         update_msg = Protocol.encode(
                             Protocol.build_message(
-                                "SUPPLY_UPDATE", self.cp_id,
-                                round(kwh_this_second, 6), amount  # Send increment
+                                "SUPPLY_UPDATE", 
+                                self.cp_id,
+                                f"{kwh_this_second:.6f}",  # kWh increment this second
+                                f"{amount:.2f}"             # Total amount so far
                             )
                         )
                         self.central_socket.send(update_msg)
 
                         print(f"[{self.cp_id}] Charging: {session['kwh_delivered']:.3f} kWh, "
-                              f"{amount}€")
+                              f"{amount:.2f}€ (Price: {self.price_per_kwh}€/kWh)")
 
             except Exception as e:
                 print(f"[{self.cp_id}] Error sending status: {e}")
@@ -358,9 +361,14 @@ class EVCPEngine:
             try:
                 print(f"\n[{self.cp_id} MENU]")
                 print(f"Current State: {self.state}")
+                print(f"Price: {self.price_per_kwh}€/kWh")
 
                 if self.state == CP_STATES["SUPPLYING"]:
                     print(f"Charging: {self.current_driver}")
+                    with self.lock:
+                        if self.current_session:
+                            print(f"  kWh delivered: {self.current_session['kwh_delivered']:.3f}")
+                            print(f"  Amount: {self.current_session.get('amount', 0):.2f}€")
                     print("1. Stop charging (simulate unplug)")
                     choice = input("Choice: ").strip()
                     if choice == "1":

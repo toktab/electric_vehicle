@@ -282,15 +282,16 @@ class EVCentral:
         driver_id = None
         with self.lock:
             if cp_id in self.charging_points:
-                self.charging_points[cp_id]["kwh_delivered"] += kwh_increment  # ✅ FIXED: Accumulate kWh
-                self.charging_points[cp_id]["amount_euro"] = amount
-                driver_id = self.charging_points[cp_id]["current_driver"]
+                cp = self.charging_points[cp_id]
+                cp["kwh_delivered"] += kwh_increment  # ✅ FIXED: Accumulate kWh
+                cp["amount_euro"] = cp["kwh_delivered"] * cp["price_per_kwh"]  # ✅ FIXED: Calculate accurately
+                driver_id = cp["current_driver"]
 
         # Forward update to driver
         if driver_id and driver_id in self.entity_to_socket:
             try:
                 update_msg = Protocol.encode(
-                    Protocol.build_message(MessageTypes.SUPPLY_UPDATE, cp_id, kwh_increment, amount)
+                    Protocol.build_message(MessageTypes.SUPPLY_UPDATE, cp_id, kwh_increment, cp["amount_euro"])
                 )
                 self.entity_to_socket[driver_id].send(update_msg)
             except Exception as e:
@@ -373,9 +374,9 @@ class EVCentral:
                 print(f"[EV_Central] ❌ Driver {driver_id} not charging at {cp_id}")
                 return
 
-            # ✅ FIXED: Use accumulated kWh
+            # ✅ FIXED: Use accumulated kWh and calculate amount accurately
             total_kwh = cp["kwh_delivered"]
-            total_amount = cp["amount_euro"]
+            total_amount = total_kwh * cp["price_per_kwh"]
             duration_seconds = int(time.time() - cp["session_start"]) if cp["session_start"] else 0
 
             # Update states immediately
@@ -627,9 +628,9 @@ class EVCentral:
                         driver_id = cp["current_driver"]
                         
                         if was_charging and driver_id:
-                            # ✅ FIXED: Use accumulated kWh
+                            # ✅ FIXED: Use accumulated kWh and calculate amount accurately
                             total_kwh = cp["kwh_delivered"]
-                            total_amount = cp["amount_euro"]
+                            total_amount = total_kwh * cp["price_per_kwh"]
                             duration_seconds = int(time.time() - cp["session_start"]) if cp["session_start"] else 0
                             
                             self.storage.save_charging_session(cp_id, driver_id, total_kwh, total_amount, duration_seconds)

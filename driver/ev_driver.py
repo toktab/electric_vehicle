@@ -61,6 +61,38 @@ class EVDriver:
             print(f"[{self.driver_id}] Failed to connect to CENTRAL: {e}")
             return False
 
+    def _reconnect_to_central(self):
+        """Attempt to reconnect to CENTRAL"""
+        print(f"[{self.driver_id}] Attempting to reconnect to CENTRAL...")
+        try:
+            # Close existing socket if any
+            if self.central_socket:
+                self.central_socket.close()
+
+            # Create new socket and connect
+            self.central_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            self.central_socket.connect((self.central_host, self.central_port))
+
+            # Re-register with CENTRAL
+            register_msg = Protocol.encode(
+                Protocol.build_message(MessageTypes.REGISTER, "DRIVER", self.driver_id)
+            )
+            self.central_socket.send(register_msg)
+            print(f"[{self.driver_id}] Reconnected and re-registered with CENTRAL")
+
+            # Restart listener thread
+            thread = threading.Thread(
+                target=self._listen_central,
+                daemon=True
+            )
+            thread.start()
+
+            return True
+
+        except Exception as e:
+            print(f"[{self.driver_id}] Failed to reconnect: {e}")
+            return False
+
     def _listen_central(self):
         """Listen for messages from CENTRAL"""
         buffer = b''
@@ -259,6 +291,18 @@ class EVDriver:
             # Status will be updated when ticket is received
             return True
 
+        except BrokenPipeError:
+            print(f"[{self.driver_id}] Connection to CENTRAL lost. Attempting to reconnect...")
+            # Try to reconnect
+            if self._reconnect_to_central():
+                # Retry sending the message
+                try:
+                    self.central_socket.send(end_charge_msg)
+                    print(f"[{self.driver_id}] 📤 Re-sent manual end charge request for {cp_id}\n")
+                    return True
+                except Exception as e:
+                    print(f"[{self.driver_id}] Failed to re-send: {e}")
+            return False
         except Exception as e:
             print(f"[{self.driver_id}] Error sending end charge: {e}")
             return False

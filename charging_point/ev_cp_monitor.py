@@ -1,5 +1,5 @@
 # ============================================================================
-# EVCharging System - EV_CP_M (Charging Point Monitor)
+# EVCharging System - EV_CP_M (Charging Point Monitor) - FIXED
 # ============================================================================
 
 import socket
@@ -17,6 +17,7 @@ while True:
     try:
         s = socket.create_connection((central_host, central_port), timeout=5)
         print("Connected to CENTRAL")
+        s.close()
         break
     except ConnectionRefusedError:
         print("Cannot connect to CENTRAL yet, retrying in 2s...")
@@ -95,7 +96,7 @@ class EVCPMonitor:
                             if fields[0] == "HEALTH_OK":
                                 with self.lock:
                                     if not self.engine_healthy:
-                                        print(f"[{self.cp_id} Monitor] Engine recovered!")
+                                        print(f"\n[{self.cp_id} Monitor] ✅ Engine recovered!")
                                         # Send recovery to CENTRAL
                                         recovery_msg = Protocol.encode(
                                             Protocol.build_message(
@@ -103,8 +104,6 @@ class EVCPMonitor:
                                             )
                                         )
                                         self.central_socket.send(recovery_msg)
-
-
 
                                     self.engine_healthy = True
                                     self.consecutive_failures = 0
@@ -132,7 +131,8 @@ class EVCPMonitor:
             if self.consecutive_failures >= self.failure_threshold:
                 if self.engine_healthy:
                     self.engine_healthy = False
-                    print(f"[{self.cp_id} Monitor] ENGINE FAULT DETECTED!")
+                    print(f"\n[{self.cp_id} Monitor] ⚠️  ENGINE FAULT DETECTED!")
+                    print(f"[{self.cp_id} Monitor] Notifying CENTRAL...")
 
                     # Send fault to CENTRAL
                     try:
@@ -140,54 +140,67 @@ class EVCPMonitor:
                             Protocol.build_message(MessageTypes.FAULT, self.cp_id)
                         )
                         self.central_socket.send(fault_msg)
+                        print(f"[{self.cp_id} Monitor] ✅ FAULT message sent to CENTRAL\n")
                     except Exception as e:
                         print(f"[{self.cp_id} Monitor] Failed to send fault: {e}")
 
-
-
-    def display_status(self):
-        """Display monitor status periodically"""
-        while self.running:
-            time.sleep(3)
-
-            with self.lock:
-                status = "OK" if self.engine_healthy else "FAULT"
-                print(f"[{self.cp_id} Monitor] Engine Status: {status} "
-                      f"(Failures: {self.consecutive_failures})")
-
     def display_menu(self):
-        """Display interactive menu"""
+        """Display interactive menu - NO auto status printing"""
+        print(f"\n[{self.cp_id} Monitor] Ready. Type 'help' for commands.\n")
+        
         while self.running:
             try:
-                print(f"\n[{self.cp_id} Monitor Menu]")
-                print(f"Engine Status: {'HEALTHY' if self.engine_healthy else 'FAULTY'}")
-                print("Options:")
-                print("1. View status")
-                print("2. Force fault simulation (optional)")
-                print("3. Reset failures counter")
+                cmd = input(f"[{self.cp_id} Monitor]> ").strip().lower()
 
-                choice = input("Choice (or press Enter to continue): ").strip()
+                if cmd == "help":
+                    print(f"\n{'='*60}")
+                    print(f"[{self.cp_id} Monitor] Available Commands:")
+                    print(f"{'='*60}")
+                    print("  status  - View current engine status")
+                    print("  fault   - Simulate engine fault")
+                    print("  reset   - Reset failure counter")
+                    print("  help    - Show this help")
+                    print("  quit    - Exit monitor")
+                    print(f"{'='*60}\n")
 
-                if choice == "1":
-                    print(f"Engine: {'HEALTHY' if self.engine_healthy else 'FAULTY'}")
-                    print(f"Consecutive failures: {self.consecutive_failures}")
-
-                elif choice == "2":
-                    # Simulate fault by setting consecutive_failures to threshold
+                elif cmd == "status":
                     with self.lock:
+                        status_str = "HEALTHY ✅" if self.engine_healthy else "FAULTY ❌"
+                        print(f"\n{'='*60}")
+                        print(f"Engine Status: {status_str}")
+                        print(f"Consecutive Failures: {self.consecutive_failures}/{self.failure_threshold}")
+                        print(f"{'='*60}\n")
+
+                elif cmd == "fault":
+                    with self.lock:
+                        print(f"\n⚠️  Simulating fault...")
                         self.consecutive_failures = self.failure_threshold
                         self._handle_engine_fault()
-                    print("Fault simulation triggered. Fault message sent to CENTRAL.")
+                    print(f"✅ Fault simulation complete\n")
 
-                elif choice == "3":
+                elif cmd == "reset":
                     with self.lock:
                         self.consecutive_failures = 0
-                    print("Counter reset")
+                        print(f"\n✅ Failure counter reset\n")
 
-                time.sleep(1)
+                elif cmd == "quit":
+                    print(f"\n[{self.cp_id} Monitor] Shutting down...\n")
+                    self.running = False
+                    break
 
+                elif cmd == "":
+                    continue
+
+                else:
+                    print(f"\n❌ Unknown command: '{cmd}'. Type 'help' for commands.\n")
+
+            except EOFError:
+                break
+            except KeyboardInterrupt:
+                print(f"\n[{self.cp_id} Monitor] Interrupted\n")
+                break
             except Exception as e:
-                print(f"Menu error: {e}")
+                print(f"\n❌ Error: {e}\n")
 
     def run(self):
         """Run the monitor"""
@@ -201,21 +214,14 @@ class EVCPMonitor:
             print(f"[{self.cp_id} Monitor] Cannot connect to CENTRAL")
             return
 
-        # Start health check loop
+        # Start health check loop in background
         health_thread = threading.Thread(
             target=self.health_check_loop,
             daemon=True
         )
         health_thread.start()
 
-        # Start status display
-        status_thread = threading.Thread(
-            target=self.display_status,
-            daemon=True
-        )
-        status_thread.start()
-
-        # Display menu
+        # Display menu (no auto status thread)
         try:
             self.display_menu()
         except KeyboardInterrupt:
