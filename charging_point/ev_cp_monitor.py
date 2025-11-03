@@ -1,27 +1,14 @@
 # ============================================================================
-# EVCharging System - EV_CP_M (Charging Point Monitor) - FIXED
+# EVCharging System - EV_CP_M (Charging Point Monitor) - FIXED FOR DISTRIBUTED
 # ============================================================================
 
 import socket
 import threading
 import time
 import sys
+import os
 from config import CP_BASE_PORT, HEALTH_CHECK_INTERVAL
 from shared.protocol import Protocol, MessageTypes
-
-
-central_host = 'central'
-central_port = 5000
-
-while True:
-    try:
-        s = socket.create_connection((central_host, central_port), timeout=5)
-        print("Connected to CENTRAL")
-        s.close()
-        break
-    except ConnectionRefusedError:
-        print("Cannot connect to CENTRAL yet, retrying in 2s...")
-        time.sleep(2)
 
 
 class EVCPMonitor:
@@ -44,28 +31,52 @@ class EVCPMonitor:
         self.failure_threshold = 3
 
         print(f"[{self.cp_id} Monitor] Initializing...")
+        print(f"[{self.cp_id} Monitor] Central: {self.central_host}:{self.central_port}")
+        print(f"[{self.cp_id} Monitor] Engine: {self.engine_host}:{self.engine_port}")
 
     def connect_to_engine(self):
         """Connect to CP Engine"""
-        try:
-            self.engine_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            self.engine_socket.connect((self.engine_host, self.engine_port))
-            print(f"[{self.cp_id} Monitor] Connected to Engine")
-            return True
-        except Exception as e:
-            print(f"[{self.cp_id} Monitor] Failed to connect to Engine: {e}")
-            return False
+        print(f"[{self.cp_id} Monitor] Connecting to Engine at {self.engine_host}:{self.engine_port}...")
+        
+        max_retries = 10
+        retry_delay = 2
+        
+        for attempt in range(max_retries):
+            try:
+                self.engine_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                self.engine_socket.connect((self.engine_host, self.engine_port))
+                print(f"[{self.cp_id} Monitor] ✅ Connected to Engine")
+                return True
+            except Exception as e:
+                print(f"[{self.cp_id} Monitor] Attempt {attempt + 1}/{max_retries} failed: {e}")
+                if attempt < max_retries - 1:
+                    print(f"[{self.cp_id} Monitor] Retrying in {retry_delay}s...")
+                    time.sleep(retry_delay)
+                else:
+                    print(f"[{self.cp_id} Monitor] ❌ Failed to connect to Engine after {max_retries} attempts")
+                    return False
 
     def connect_to_central(self):
         """Connect to CENTRAL"""
-        try:
-            self.central_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            self.central_socket.connect((self.central_host, self.central_port))
-            print(f"[{self.cp_id} Monitor] Connected to CENTRAL")
-            return True
-        except Exception as e:
-            print(f"[{self.cp_id} Monitor] Failed to connect to CENTRAL: {e}")
-            return False
+        print(f"[{self.cp_id} Monitor] Connecting to CENTRAL at {self.central_host}:{self.central_port}...")
+        
+        max_retries = 10
+        retry_delay = 2
+        
+        for attempt in range(max_retries):
+            try:
+                self.central_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                self.central_socket.connect((self.central_host, self.central_port))
+                print(f"[{self.cp_id} Monitor] ✅ Connected to CENTRAL")
+                return True
+            except Exception as e:
+                print(f"[{self.cp_id} Monitor] Attempt {attempt + 1}/{max_retries} failed: {e}")
+                if attempt < max_retries - 1:
+                    print(f"[{self.cp_id} Monitor] Retrying in {retry_delay}s...")
+                    time.sleep(retry_delay)
+                else:
+                    print(f"[{self.cp_id} Monitor] ❌ Failed to connect to CENTRAL after {max_retries} attempts")
+                    return False
 
     def health_check_loop(self):
         """Send health checks to engine every second"""
