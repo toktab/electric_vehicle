@@ -1,6 +1,3 @@
-# NOTE: The 'version' field is now deprecated in Compose V2, so we remove it.
-# Docker will automatically detect the format.
-
 services:
   # ============================================================================
   # Infrastructure - Zookeeper & Kafka
@@ -24,7 +21,7 @@ services:
     environment:
       KAFKA_BROKER_ID: 1
       KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
-      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://192.168.56.1:9092
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
       KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
       ALLOW_PLAINTEXT_LISTENER: "yes"
@@ -32,9 +29,14 @@ services:
       - "9092:9092"
     networks:
       - evcharging_net
+    healthcheck:
+      test: ["CMD", "kafka-broker-api-versions", "--bootstrap-server", "localhost:9092"]
+      interval: 10s
+      timeout: 10s
+      retries: 5
 
   # ============================================================================
-  # CENTRAL - Control Center (Interactive for admin commands)
+  # CENTRAL - Control Center
   # ============================================================================
   central:
     build:
@@ -42,13 +44,14 @@ services:
       dockerfile: Dockerfile.central
     container_name: evcharging_central
     depends_on:
-      - kafka
+      kafka:
+        condition: service_healthy
     environment:
       KAFKA_BROKER: kafka:9092
     ports:
       - "5000:5000"
     volumes:
-      - ./data:/app/data  # ←
+      - ./data:/app/data
     networks:
       - evcharging_net
     stdin_open: true
@@ -67,7 +70,7 @@ services:
       - kafka
     environment:
       KAFKA_BROKER: kafka:9092
-    command: python charging_point/ev_cp_engine.py CP-001 40.5 -3.1 0.30 192.168.56.1 5000
+    command: python charging_point/ev_cp_engine.py CP-001 40.5 -3.1 0.30 central 5000
     ports:
       - "6001:6001"
     networks:
@@ -83,10 +86,9 @@ services:
     depends_on:
       - central
       - cp_engine_1
-      - kafka
     environment:
       KAFKA_BROKER: kafka:9092
-    command: python charging_point/ev_cp_monitor.py CP-001 cp_engine_1 6001 central 5000
+    command: python charging_point/ev_cp_monitor.py CP-001 evcharging_cp_engine_1 6001 central 5000
     networks:
       - evcharging_net
     stdin_open: true
@@ -105,7 +107,7 @@ services:
       - kafka
     environment:
       KAFKA_BROKER: kafka:9092
-    command: python charging_point/ev_cp_engine.py CP-002 40.4 -3.2 0.35 192.168.56.1 5000
+    command: python charging_point/ev_cp_engine.py CP-002 40.4 -3.2 0.35 central 5000
     ports:
       - "6002:6002"
     networks:
@@ -121,7 +123,6 @@ services:
     depends_on:
       - cp_engine_2
       - central
-      - kafka
     environment:
       KAFKA_BROKER: kafka:9092
     command: python charging_point/ev_cp_monitor.py CP-002 evcharging_cp_engine_2 6002 central 5000
@@ -143,15 +144,14 @@ services:
       - central
     environment:
       KAFKA_BROKER: kafka:9092
-    command: >
-      sh -c 'sleep 5 && python driver/ev_driver.py DRIVER-001 central 5000'
+    command: sh -c 'sleep 5 && python driver/ev_driver.py DRIVER-001 central 5000'
     networks:
       - evcharging_net
     stdin_open: true
     tty: true
 
   # ============================================================================
-  # Driver 2 - Additional driver for testing scalability
+  # Driver 2
   # ============================================================================
   driver_2:
     build:
@@ -163,15 +163,14 @@ services:
       - central
     environment:
       KAFKA_BROKER: kafka:9092
-    command: >
-      sh -c 'sleep 6 && python driver/ev_driver.py DRIVER-002 central 5000'
+    command: sh -c 'sleep 6 && python driver/ev_driver.py DRIVER-002 central 5000'
     networks:
       - evcharging_net
     stdin_open: true
     tty: true
 
   # ============================================================================
-  # Auto Driver - Auto driver for testing
+  # Auto Driver
   # ============================================================================
   driver_auto:
     build:
@@ -183,8 +182,7 @@ services:
       - central
     environment:
       KAFKA_BROKER: kafka:9092
-    command: >
-      sh -c 'sleep 5 && python driver/ev_driver_auto.py DRIVER-AUTO central 5000 data/charging_requests.txt'
+    command: sh -c 'sleep 5 && python driver/ev_driver_auto.py DRIVER-AUTO central 5000 data/charging_requests.txt'
     volumes:
       - ./data:/app/data
     networks:
@@ -196,7 +194,3 @@ services:
 networks:
   evcharging_net:
     driver: bridge
-
-volumes:
-  zookeeper_data:
-  kafka_data:
