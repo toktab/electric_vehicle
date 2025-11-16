@@ -1,5 +1,5 @@
 # ============================================================================
-# EVCharging System - EV_CP_M (Charging Point Monitor) - FIXED FOR DISTRIBUTED
+# EVCharging System - EV_CP_M (Charging Point Monitor) - WITH DRIVER TRACKING
 # ============================================================================
 
 import socket
@@ -29,6 +29,10 @@ class EVCPMonitor:
         self.engine_healthy = True
         self.consecutive_failures = 0
         self.failure_threshold = 3
+
+        # ⭐ NEW: Driver tracking
+        self.current_driver = None  # Who's using this CP
+        self.charging_active = False
 
         print(f"[{self.cp_id} Monitor] Initializing...")
         print(f"[{self.cp_id} Monitor] Central: {self.central_host}:{self.central_port}")
@@ -67,6 +71,13 @@ class EVCPMonitor:
             try:
                 self.central_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
                 self.central_socket.connect((self.central_host, self.central_port))
+
+                # ⭐ Register as monitor with CENTRAL
+                register_msg = Protocol.encode(
+                    Protocol.build_message(MessageTypes.REGISTER, "MONITOR", self.cp_id, self.cp_id)
+                )
+                self.central_socket.send(register_msg)
+
                 print(f"[{self.cp_id} Monitor] ✅ Connected to CENTRAL")
                 return True
             except Exception as e:
@@ -77,6 +88,58 @@ class EVCPMonitor:
                 else:
                     print(f"[{self.cp_id} Monitor] ❌ Failed to connect to CENTRAL after {max_retries} attempts")
                     return False
+
+    def _listen_central(self):
+        """⭐ NEW: Listen for driver notifications from CENTRAL"""
+        buffer = b''
+        try:
+            while self.running:
+                try:
+                    data = self.central_socket.recv(4096)
+                    if not data:
+                        break
+
+                    buffer += data
+
+                    while len(buffer) > 0:
+                        message, is_valid = Protocol.decode(buffer)
+
+                        if is_valid:
+                            etx_pos = buffer.find(b'\x03')
+                            buffer = buffer[etx_pos + 2:]
+
+                            fields = Protocol.parse_message(message)
+                            msg_type = fields[0]
+
+                            # ⭐ Handle driver start notification
+                            if msg_type == "DRIVER_START":
+                                # DRIVER_START#cp_id#driver_id
+                                driver_id = fields[2]
+                                with self.lock:
+                                    self.current_driver = driver_id
+                                    self.charging_active = True
+                                print(f"\n[{self.cp_id} Monitor] 🚗 Driver {driver_id} started charging\n")
+
+                            # ⭐ Handle driver stop notification
+                            elif msg_type == "DRIVER_STOP":
+                                # DRIVER_STOP#cp_id#driver_id
+                                driver_id = fields[2]
+                                with self.lock:
+                                    self.current_driver = None
+                                    self.charging_active = False
+                                print(f"\n[{self.cp_id} Monitor] 🏁 Driver {driver_id} finished charging\n")
+
+                        else:
+                            break
+
+                except socket.timeout:
+                    continue
+                except Exception as e:
+                    print(f"[{self.cp_id} Monitor] Listener error: {e}")
+                    break
+
+        except Exception as e:
+            print(f"[{self.cp_id} Monitor] CENTRAL connection lost: {e}")
 
     def health_check_loop(self):
         """Send health checks to engine every second"""
@@ -156,7 +219,7 @@ class EVCPMonitor:
                         print(f"[{self.cp_id} Monitor] Failed to send fault: {e}")
 
     def display_menu(self):
-        """Display interactive menu - NO auto status printing"""
+        """Display interactive menu with driver info"""
         print(f"\n[{self.cp_id} Monitor] Ready. Type 'help' for commands.\n")
         
         while self.running:
@@ -167,7 +230,7 @@ class EVCPMonitor:
                     print(f"\n{'='*60}")
                     print(f"[{self.cp_id} Monitor] Available Commands:")
                     print(f"{'='*60}")
-                    print("  status  - View current engine status")
+                    print("  status  - View current engine & driver status")
                     print("  fault   - Simulate engine fault")
                     print("  reset   - Reset failure counter")
                     print("  help    - Show this help")
@@ -176,10 +239,17 @@ class EVCPMonitor:
 
                 elif cmd == "status":
                     with self.lock:
-                        status_str = "HEALTHY ✅" if self.engine_healthy else "FAULTY ❌"
+                        engine_status = "HEALTHY ✅" if self.engine_healthy else "FAULTY ❌"
+                        driver_status = f"USED BY: {self.current_driver} 🚗" if self.current_driver else "AVAILABLE 🟢"
+                        
                         print(f"\n{'='*60}")
-                        print(f"Engine Status: {status_str}")
+                        print(f"Charging Point: {self.cp_id}")
+                        print(f"{'='*60}")
+                        print(f"Engine Status: {engine_status}")
                         print(f"Consecutive Failures: {self.consecutive_failures}/{self.failure_threshold}")
+                        print(f"Driver Status: {driver_status}")
+                        if self.charging_active:
+                            print(f"Charging: ACTIVE ⚡")
                         print(f"{'='*60}\n")
 
                 elif cmd == "fault":
@@ -225,6 +295,13 @@ class EVCPMonitor:
             print(f"[{self.cp_id} Monitor] Cannot connect to CENTRAL")
             return
 
+        # ⭐ Start CENTRAL listener
+        central_thread = threading.Thread(
+            target=self._listen_central,
+            daemon=True
+        )
+        central_thread.start()
+
         # Start health check loop in background
         health_thread = threading.Thread(
             target=self.health_check_loop,
@@ -232,7 +309,7 @@ class EVCPMonitor:
         )
         health_thread.start()
 
-        # Display menu (no auto status thread)
+        # Display menu
         try:
             self.display_menu()
         except KeyboardInterrupt:

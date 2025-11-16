@@ -30,6 +30,7 @@ class EVCentral:
         self.drivers = {}             # {driver_id: {status, current_cp, etc}}
         self.active_connections = {}  # {connection_id: socket}
         self.entity_to_socket = {}    # {entity_id: socket}
+        self.monitors = {}            # {cp_id: monitor_socket}
 
         # Kafka client
         self.kafka = KafkaClient("EV_Central")
@@ -220,6 +221,21 @@ class EVCentral:
             )
             client_socket.send(response)
 
+        elif entity_type == "MONITOR":
+        # ⭐ NEW: Register monitor
+            monitor_cp_id = fields[3] if len(fields) > 3 else None
+        
+            if monitor_cp_id:
+                with self.lock:
+                    self.monitors[monitor_cp_id] = client_socket
+                
+                print(f"[EV_Central] ✅ Monitor Registered for {monitor_cp_id}")
+                
+                response = Protocol.encode(
+                    Protocol.build_message(MessageTypes.ACKNOWLEDGE, monitor_cp_id, "MONITOR_OK")
+                )
+                client_socket.send(response)
+
     def _handle_charge_request(self, fields, client_socket, client_id):
         """Handle driver charging request"""
         if len(fields) < 4:
@@ -263,6 +279,16 @@ class EVCentral:
             Protocol.build_message(MessageTypes.AUTHORIZE, driver_id, cp_id, kwh_needed, cp["price_per_kwh"])
         )
         client_socket.send(response)
+
+        if cp_id in self.monitors:
+            try:
+                monitor_notify = Protocol.encode(
+                    Protocol.build_message("DRIVER_START", cp_id, driver_id)
+                )
+                self.monitors[cp_id].send(monitor_notify)
+                print(f"[EV_Central] 📤 Notified monitor: {driver_id} started at {cp_id}")
+            except Exception as e:
+                print(f"[EV_Central] Failed to notify monitor: {e}")
 
         self.kafka.publish_event("charging_logs", "CHARGE_AUTHORIZED", {
             "driver_id": driver_id,
@@ -348,6 +374,22 @@ class EVCentral:
             "total_kwh": total_kwh,
             "total_amount": total_amount
         })
+        if cp_id in self.monitors:
+            try:
+                monitor_notify = Protocol.encode(
+                    Protocol.build_message("DRIVER_STOP", cp_id, driver_id)
+                )
+                self.monitors[cp_id].send(monitor_notify)
+                print(f"[EV_Central] 📤 Notified monitor: {driver_id} finished at {cp_id}")
+            except Exception as e:
+                print(f"[EV_Central] Failed to notify monitor: {e}")
+
+        self.kafka.publish_event("charging_logs", "CHARGE_COMPLETED", {
+            "cp_id": cp_id,
+            "driver_id": driver_id,
+            "total_kwh": total_kwh,
+            "total_amount": total_amount
+        })
 
     def _handle_end_charge(self, fields, client_socket, client_id):
         """Handle manual end charge from driver"""
@@ -415,6 +457,16 @@ class EVCentral:
                 print(f"[EV_Central] 📤 Sent ticket to driver {driver_id}")
             except Exception as e:
                 print(f"[EV_Central] ⚠️  Failed to send ticket to {driver_id}: {e}")
+
+        if cp_id in self.monitors:
+            try:
+                monitor_notify = Protocol.encode(
+                    Protocol.build_message("DRIVER_STOP", cp_id, driver_id)
+                )
+                self.monitors[cp_id].send(monitor_notify)
+                print(f"[EV_Central] 📤 Notified monitor: {driver_id} stopped at {cp_id}")
+            except Exception as e:
+                print(f"[EV_Central] Failed to notify monitor: {e}")
 
         self.kafka.publish_event("charging_logs", "CHARGE_MANUALLY_ENDED", {
             "cp_id": cp_id,
