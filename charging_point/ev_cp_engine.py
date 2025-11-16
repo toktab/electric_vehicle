@@ -100,8 +100,10 @@ class EVCPEngine:
                     if self.running:
                         print(f"[{self.cp_id}] Monitor connection error: {e}")
 
-        except Exception as e:
-            print(f"[{self.cp_id}] Monitor listening error: {e}")
+        except Exception:
+            if self.running:
+                print(f"[{self.cp_id}] Monitor listener error")
+
 
     def _listen_central(self):
         """Listen for messages from CENTRAL via socket"""
@@ -265,6 +267,7 @@ class EVCPEngine:
                 self.state = CP_STATES["ACTIVATED"]
                 self.current_driver = None
                 self.current_session = None
+                print(f"[ENGINE] {self.cp_id} → Driver unplugged, available now")
             else:
                 print(f"[{self.cp_id}] No active supply to end")
 
@@ -351,10 +354,12 @@ class EVCPEngine:
                             Protocol.build_message(
                                 "SUPPLY_UPDATE",
                                 self.cp_id,
+                                self.current_driver,
                                 f"{session['kwh_delivered']:.6f}",
                                 f"{amount:.2f}"
                             )
                         )
+
 
                         self.central_socket.send(update_msg)
 
