@@ -198,6 +198,7 @@ class EVCPEngine:
                 }
 
                 print(f"[{self.cp_id}] Charging authorized for {driver_id}")
+                print(f"[ENGINE] {self.cp_id} → IN USE")
 
     def _handle_stop_command(self):
         """Handle STOP command from CENTRAL"""
@@ -240,10 +241,14 @@ class EVCPEngine:
             if self.state == CP_STATES["SUPPLYING"] and self.current_session:
                 driver_id = self.current_driver
                 session = self.current_session
-                kwh_delivered = session["kwh_delivered"]
+
+                # Calculate final kWh based on time elapsed (for accurate manual end)
+                elapsed = time.time() - session["start_time"]
+                total_seconds = 14.0  # Demo charging time
+                kwh_delivered = min(session["kwh_needed"], (elapsed / total_seconds) * session["kwh_needed"])
                 total_amount = round(kwh_delivered * self.price_per_kwh, 2)
 
-                print(f"[{self.cp_id}] Supply ended by CENTRAL for {driver_id}")
+                print(f"[{self.cp_id}] Supply ended by CENTRAL for {driver_id} - {kwh_delivered:.3f} kWh, {total_amount:.2f}€")
 
                 # Notify CENTRAL of supply end
                 end_msg = Protocol.encode(
@@ -278,11 +283,13 @@ class EVCPEngine:
                 driver_id = self.current_driver
                 session = self.current_session
 
-                # Calculate final amount
-                kwh_delivered = session["kwh_delivered"]
+                # Calculate final kWh based on time elapsed (for accurate calculation)
+                elapsed = time.time() - session["start_time"]
+                total_seconds = 14.0  # Demo charging time
+                kwh_delivered = min(session["kwh_needed"], (elapsed / total_seconds) * session["kwh_needed"])
                 total_amount = round(kwh_delivered * self.price_per_kwh, 2)
 
-                print(f"[{self.cp_id}] Supply ended for {driver_id}")
+                print(f"[{self.cp_id}] Supply ended for {driver_id} - {kwh_delivered:.3f} kWh, {total_amount:.2f}€")
 
                 # Notify CENTRAL
                 end_msg = Protocol.encode(
@@ -297,6 +304,7 @@ class EVCPEngine:
                 self.current_driver = None
                 self.current_session = None
 
+                print(f"[ENGINE] {self.cp_id} → Driver unplugged, available now")
                 return True
 
         return False
@@ -330,6 +338,7 @@ class EVCPEngine:
                         if session["kwh_delivered"] >= session["kwh_needed"]:
                             session["kwh_delivered"] = session["kwh_needed"]
                             print(f"[{self.cp_id}] Target reached, auto-stopping...")
+                            print(f"[ENGINE] {self.cp_id} → CHARGED")
                             self.stop_charging()
                             continue
 
@@ -340,12 +349,13 @@ class EVCPEngine:
                         # ✅ Send increment AND total amount
                         update_msg = Protocol.encode(
                             Protocol.build_message(
-                                "SUPPLY_UPDATE", 
+                                "SUPPLY_UPDATE",
                                 self.cp_id,
-                                f"{kwh_this_second:.6f}",
+                                f"{session['kwh_delivered']:.6f}",
                                 f"{amount:.2f}"
                             )
                         )
+
                         self.central_socket.send(update_msg)
 
                         print(f"[{self.cp_id}] Charging: {session['kwh_delivered']:.3f} kWh, "

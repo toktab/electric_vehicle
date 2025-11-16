@@ -243,7 +243,7 @@ class EVCentral:
 
         driver_id = fields[1]
         cp_id = fields[2]
-        kwh_needed = fields[3]
+        kwh_needed = float(fields[3])
 
         with self.lock:
             if cp_id not in self.charging_points:
@@ -269,6 +269,7 @@ class EVCentral:
             cp["session_start"] = time.time()
             cp["kwh_delivered"] = 0  # ✅ FIXED: Reset kWh counter
             cp["amount_euro"] = 0
+            cp["kwh_needed"] = kwh_needed  # ✅ Store for accurate final calculation
             
             self.drivers[driver_id]["status"] = "CHARGING"
             self.drivers[driver_id]["current_cp"] = cp_id
@@ -416,10 +417,12 @@ class EVCentral:
                 print(f"[EV_Central] ❌ Driver {driver_id} not charging at {cp_id}")
                 return
 
-            # ✅ FIXED: Use accumulated kWh and calculate amount accurately
-            total_kwh = cp["kwh_delivered"]
-            total_amount = total_kwh * cp["price_per_kwh"]
+            # ✅ FIXED: Calculate kWh based on actual time elapsed for accurate billing
             duration_seconds = int(time.time() - cp["session_start"]) if cp["session_start"] else 0
+            total_seconds = 14.0  # Demo charging time
+            kwh_needed = cp.get("kwh_needed", 10)  # Default to 10 if not set
+            total_kwh = min(kwh_needed, (duration_seconds / total_seconds) * kwh_needed)
+            total_amount = round(total_kwh * cp["price_per_kwh"], 2)
 
             # Update states immediately
             cp["state"] = CP_STATES["ACTIVATED"]
