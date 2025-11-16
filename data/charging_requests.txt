@@ -2,8 +2,8 @@
 # Format: CP_ID, KWH_NEEDED
 # One request per line, will be processed sequentially with 4-second delay between them
 
-CP-001, 15
-CP-002, 20
 CP-001, 10
-CP-002, 25
-CP-001, 12
+CP-002, 10
+CP-001, 10
+CP-002, 10
+CP-001, 10

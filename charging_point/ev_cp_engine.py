@@ -320,9 +320,8 @@ class EVCPEngine:
                     if self.state == CP_STATES["SUPPLYING"] and self.current_session:
                         session = self.current_session
 
-                        # ✅ FIX: Calculate kWh increment for this second
-                        power_kw = 10.0  # 10 kW charging power
-                        kwh_this_second = power_kw / 3600.0  # Convert to kWh per second
+                        # ✅ For 14-second charging demo (10 kWh target)
+                        kwh_this_second = session["kwh_needed"] / 14.0  # Spread over 14 seconds
                         
                         # Add to accumulated kWh
                         session["kwh_delivered"] += kwh_this_second
@@ -334,23 +333,23 @@ class EVCPEngine:
                             self.stop_charging()
                             continue
 
-                        # ✅ FIX: Calculate amount based on ACCUMULATED kWh
+                        # ✅ Calculate amount based on ACCUMULATED kWh
                         amount = session["kwh_delivered"] * self.price_per_kwh
-                        session["amount"] = amount  # Store for reference
+                        session["amount"] = amount
 
-                        # ✅ FIX: Send increment AND total amount
+                        # ✅ Send increment AND total amount
                         update_msg = Protocol.encode(
                             Protocol.build_message(
                                 "SUPPLY_UPDATE", 
                                 self.cp_id,
-                                f"{kwh_this_second:.6f}",  # kWh increment this second
-                                f"{amount:.2f}"             # Total amount so far
+                                f"{kwh_this_second:.6f}",
+                                f"{amount:.2f}"
                             )
                         )
                         self.central_socket.send(update_msg)
 
                         print(f"[{self.cp_id}] Charging: {session['kwh_delivered']:.3f} kWh, "
-                              f"{amount:.2f}€ (Price: {self.price_per_kwh}€/kWh)")
+                            f"{amount:.2f}€ (Price: {self.price_per_kwh}€/kWh)")
 
             except Exception as e:
                 print(f"[{self.cp_id}] Error sending status: {e}")
