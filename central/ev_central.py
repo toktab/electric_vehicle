@@ -1,5 +1,5 @@
 # ============================================================================
-# EVCharging System - EV_Central (Control Center) - FIXED kWh TRACKING
+# EVCharging System - EV_Central (Control Center) - FULLY FIXED
 # ============================================================================
 
 import socket
@@ -57,7 +57,7 @@ class EVCentral:
                     "location": (cp_data['latitude'], cp_data['longitude']),
                     "price_per_kwh": cp_data['price_per_kwh'],
                     "current_driver": None,
-                    "kwh_delivered": 0,  # ✅ FIXED: Track actual kWh delivered
+                    "kwh_delivered": 0,
                     "amount_euro": 0,
                     "session_start": None
                 }
@@ -141,6 +141,8 @@ class EVCentral:
         fields = Protocol.parse_message(message)
         msg_type = fields[0]
 
+        print(f"[EV_Central] 📨 Received: {msg_type} from {client_id}")
+
         if msg_type == MessageTypes.REGISTER:
             self._handle_register(fields, client_socket, client_id)
         elif msg_type == MessageTypes.HEARTBEAT:
@@ -180,7 +182,7 @@ class EVCentral:
                     "price_per_kwh": price,
                     "connected_at": datetime.now().isoformat(),
                     "current_driver": None,
-                    "kwh_delivered": 0,  # ✅ FIXED
+                    "kwh_delivered": 0,
                     "amount_euro": 0,
                     "session_start": None
                 }
@@ -211,6 +213,7 @@ class EVCentral:
                 }
                 
                 self.entity_to_socket[entity_id] = client_socket
+                print(f"[EV_Central] 🔑 Mapped driver {entity_id} to socket")
 
             self.storage.save_driver(entity_id, "IDLE")
 
@@ -222,7 +225,6 @@ class EVCentral:
             client_socket.send(response)
 
         elif entity_type == "MONITOR":
-        # ⭐ NEW: Register monitor
             monitor_cp_id = fields[3] if len(fields) > 3 else None
         
             if monitor_cp_id:
@@ -239,11 +241,14 @@ class EVCentral:
     def _handle_charge_request(self, fields, client_socket, client_id):
         """Handle driver charging request"""
         if len(fields) < 4:
+            print(f"[EV_Central] ⚠️  Invalid REQUEST_CHARGE: {fields}")
             return
 
         driver_id = fields[1]
         cp_id = fields[2]
         kwh_needed = float(fields[3])
+
+        print(f"[EV_Central] 🔌 {driver_id} requesting {kwh_needed} kWh at {cp_id}")
 
         with self.lock:
             if cp_id not in self.charging_points:
@@ -251,6 +256,7 @@ class EVCentral:
                     Protocol.build_message(MessageTypes.DENY, driver_id, cp_id, "CP_NOT_FOUND")
                 )
                 client_socket.send(response)
+                print(f"[EV_Central] ❌ Denied: CP not found")
                 return
 
             cp = self.charging_points[cp_id]
@@ -261,26 +267,33 @@ class EVCentral:
                     Protocol.build_message(MessageTypes.DENY, driver_id, cp_id, reason)
                 )
                 client_socket.send(response)
+                print(f"[EV_Central] ❌ Denied: {reason}")
                 return
 
             # Authorization granted
             cp["state"] = CP_STATES["SUPPLYING"]
             cp["current_driver"] = driver_id
             cp["session_start"] = time.time()
-            cp["kwh_delivered"] = 0  # ✅ FIXED: Reset kWh counter
+            cp["kwh_delivered"] = 0
             cp["amount_euro"] = 0
-            cp["kwh_needed"] = kwh_needed  # ✅ Store for accurate final calculation
+            cp["kwh_needed"] = kwh_needed
             
             self.drivers[driver_id]["status"] = "CHARGING"
             self.drivers[driver_id]["current_cp"] = cp_id
 
         print(f"[EV_Central] ✅ Charge authorized: Driver {driver_id} → CP {cp_id}")
 
+        # Send AUTHORIZE to driver
         response = Protocol.encode(
             Protocol.build_message(MessageTypes.AUTHORIZE, driver_id, cp_id, kwh_needed, cp["price_per_kwh"])
         )
-        client_socket.send(response)
+        try:
+            client_socket.send(response)
+            print(f"[EV_Central] 📤 Sent AUTHORIZE to driver {driver_id}")
+        except Exception as e:
+            print(f"[EV_Central] ⚠️  Failed to send AUTHORIZE to driver: {e}")
 
+        # Notify monitor
         if cp_id in self.monitors:
             try:
                 monitor_notify = Protocol.encode(
@@ -300,25 +313,28 @@ class EVCentral:
     def _handle_supply_update(self, fields, client_socket):
         """Handle real-time supply updates from CP"""
         if len(fields) < 4:
+            print(f"[EV_Central] ⚠️  Invalid SUPPLY_UPDATE: {fields}")
             return
 
         cp_id = fields[1]
-        kwh_increment = float(fields[2])  # ✅ FIXED: This is kWh added this second
+        kwh_increment = float(fields[2])
         amount = float(fields[3])
 
         driver_id = None
         with self.lock:
             if cp_id in self.charging_points:
                 cp = self.charging_points[cp_id]
-                cp["kwh_delivered"] += kwh_increment  # ✅ FIXED: Accumulate kWh
-                cp["amount_euro"] = cp["kwh_delivered"] * cp["price_per_kwh"]  # ✅ FIXED: Calculate accurately
+                cp["kwh_delivered"] += kwh_increment
+                cp["amount_euro"] = amount
                 driver_id = cp["current_driver"]
+                
+                print(f"[EV_Central] 📊 CP {cp_id}: {cp['kwh_delivered']:.3f} kWh, {amount:.2f}€")
 
         # Forward update to driver
         if driver_id and driver_id in self.entity_to_socket:
             try:
                 update_msg = Protocol.encode(
-                    Protocol.build_message(MessageTypes.SUPPLY_UPDATE, cp_id, kwh_increment, cp["amount_euro"])
+                    Protocol.build_message(MessageTypes.SUPPLY_UPDATE, cp_id, kwh_increment, amount)
                 )
                 self.entity_to_socket[driver_id].send(update_msg)
             except Exception as e:
@@ -345,7 +361,7 @@ class EVCentral:
                 
                 cp["state"] = CP_STATES["ACTIVATED"]
                 cp["current_driver"] = None
-                cp["kwh_delivered"] = 0  # ✅ FIXED: Reset
+                cp["kwh_delivered"] = 0
                 cp["amount_euro"] = 0
                 cp["session_start"] = None
 
@@ -366,15 +382,10 @@ class EVCentral:
                     Protocol.build_message(MessageTypes.TICKET, cp_id, total_kwh, total_amount)
                 )
                 self.entity_to_socket[driver_id].send(ticket_msg)
+                print(f"[EV_Central] 📤 Sent TICKET to driver {driver_id}")
             except Exception as e:
                 print(f"[EV_Central] Failed to send ticket to {driver_id}: {e}")
 
-        self.kafka.publish_event("charging_logs", "CHARGE_COMPLETED", {
-            "cp_id": cp_id,
-            "driver_id": driver_id,
-            "total_kwh": total_kwh,
-            "total_amount": total_amount
-        })
         if cp_id in self.monitors:
             try:
                 monitor_notify = Protocol.encode(
@@ -417,14 +428,12 @@ class EVCentral:
                 print(f"[EV_Central] ❌ Driver {driver_id} not charging at {cp_id}")
                 return
 
-            # ✅ FIXED: Calculate kWh based on actual time elapsed for accurate billing
             duration_seconds = int(time.time() - cp["session_start"]) if cp["session_start"] else 0
-            total_seconds = 14.0  # Demo charging time
-            kwh_needed = cp.get("kwh_needed", 10)  # Default to 10 if not set
+            total_seconds = 14.0
+            kwh_needed = cp.get("kwh_needed", 10)
             total_kwh = min(kwh_needed, (duration_seconds / total_seconds) * kwh_needed)
             total_amount = round(total_kwh * cp["price_per_kwh"], 2)
 
-            # Update states immediately
             cp["state"] = CP_STATES["ACTIVATED"]
             cp["current_driver"] = None
             cp["kwh_delivered"] = 0
@@ -511,7 +520,6 @@ class EVCentral:
                 cp["state"] = CP_STATES["OUT_OF_ORDER"]
                 
                 if was_supplying and driver_id:
-                    # ✅ FIXED: Use accumulated kWh
                     total_kwh = cp["kwh_delivered"]
                     total_amount = cp["amount_euro"]
                     duration_seconds = int(time.time() - cp["session_start"]) if cp["session_start"] else 0
@@ -608,7 +616,7 @@ class EVCentral:
                         print(f"  [{color}] {cp_id}: {cp_data['state']}")
                         if cp_data["state"] == CP_STATES["SUPPLYING"]:
                             print(f"      Driver: {cp_data['current_driver']}")
-                            print(f"      kWh: {cp_data['kwh_delivered']:.2f} kWh")  # ✅ FIXED
+                            print(f"      kWh: {cp_data['kwh_delivered']:.2f} kWh")
                             print(f"      Amount: {cp_data['amount_euro']:.2f}€")
 
                 print("\n[DRIVERS]")
@@ -623,7 +631,7 @@ class EVCentral:
                 print("="*80 + "\n")
 
     def handle_admin_commands(self):
-        """Handle admin commands for stop/resume CPs"""
+        """Handle admin commands"""
         while self.running:
             try:
                 cmd = input("\n[ADMIN] Command (stop/resume <CP_ID>, list, history, quit): ").strip()
@@ -683,7 +691,6 @@ class EVCentral:
                         driver_id = cp["current_driver"]
                         
                         if was_charging and driver_id:
-                            # ✅ FIXED: Use accumulated kWh and calculate amount accurately
                             total_kwh = cp["kwh_delivered"]
                             total_amount = total_kwh * cp["price_per_kwh"]
                             duration_seconds = int(time.time() - cp["session_start"]) if cp["session_start"] else 0
