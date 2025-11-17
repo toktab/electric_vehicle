@@ -1,5 +1,5 @@
 # ============================================================================
-# EVCharging System - EV_CP_M (Charging Point Monitor) - WITH DRIVER TRACKING
+# EVCharging System - EV_CP_M (Charging Point Monitor) - UPDATED
 # ============================================================================
 
 import socket
@@ -31,13 +31,14 @@ class EVCPMonitor:
         self.consecutive_failures = 0
         self.failure_threshold = 3
 
-        # ⭐ NEW: Driver tracking
-        self.current_driver = None  # Who's using this CP
+        # Driver tracking
+        self.current_driver = None
         self.charging_active = False
         self.charge_start_time = None
         self.charge_kwh_needed = 0
-        self.charge_progress = 0  # 0-100
+        self.charge_progress = 0
         self.last_progress_update = 0
+        self.charging_complete = False  # NEW: Track when 100% reached
 
         print(f"[{self.cp_id} Monitor] Initializing...")
         print(f"[{self.cp_id} Monitor] Central: {self.central_host}:{self.central_port}")
@@ -77,7 +78,7 @@ class EVCPMonitor:
                 self.central_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
                 self.central_socket.connect((self.central_host, self.central_port))
 
-                # ⭐ Register as monitor with CENTRAL
+                # Register as monitor with CENTRAL
                 register_msg = Protocol.encode(
                     Protocol.build_message(MessageTypes.REGISTER, "MONITOR", self.cp_id, self.cp_id)
                 )
@@ -95,7 +96,7 @@ class EVCPMonitor:
                     return False
 
     def _listen_central(self):
-        """⭐ Listen for driver notifications from CENTRAL with progress tracking"""
+        """Listen for driver notifications from CENTRAL"""
         buffer = b''
         try:
             while self.running:
@@ -116,19 +117,20 @@ class EVCPMonitor:
                             fields = Protocol.parse_message(message)
                             msg_type = fields[0]
 
-                            # ⭐ Handle driver start notification
+                            # Handle driver start notification
                             if msg_type == "DRIVER_START":
                                 driver_id = fields[2]
                                 with self.lock:
                                     self.current_driver = driver_id
                                     self.charging_active = True
                                     self.charge_start_time = datetime.now()
-                                    self.charge_kwh_needed = 10  # Default, will be updated
+                                    self.charge_kwh_needed = 10
                                     self.charge_progress = 0
                                     self.last_progress_update = 0
+                                    self.charging_complete = False
                                 
                                 print(f"\n{'='*70}")
-                                print(f"🚗 DRIVER {driver_id} STARTED CHARGING")
+                                print(f"🚗 Driver started charging")
                                 print(f"{'='*70}")
                                 print(f"   Time: {self.charge_start_time.strftime('%H:%M:%S')}")
                                 print(f"   Estimated Duration: ~14 seconds")
@@ -141,21 +143,28 @@ class EVCPMonitor:
                                 )
                                 progress_thread.start()
 
-                            # ⭐ Handle driver stop notification
-                            elif msg_type == "DRIVER_STOP":
-                                driver_id = fields[2]
+                            # Handle charging complete notification
+                            elif msg_type == "CHARGING_COMPLETE":
                                 with self.lock:
-                                    was_charging = self.charging_active
+                                    self.charging_complete = True
+                                    self.charge_progress = 100
+                                
+                                print(f"\n{'='*70}")
+                                print(f"🔋 CHARGING COMPLETED - 100%")
+                                print(f"{'='*70}\n")
+
+                            # Handle driver stop notification (unplugged)
+                            elif msg_type == "DRIVER_STOP":
+                                with self.lock:
+                                    was_charging = self.charging_active or self.charging_complete
                                     self.current_driver = None
                                     self.charging_active = False
-                                    self.charge_progress = 100
+                                    self.charging_complete = False
+                                    self.charge_progress = 0
                                 
                                 if was_charging:
                                     print(f"\n{'='*70}")
-                                    print(f"🏁 CHARGING COMPLETED - 100%")
-                                    print(f"{'='*70}")
-                                    print(f"   Driver: {driver_id}")
-                                    print(f"   Status: ✅ Charge Complete!")
+                                    print(f"🔌 UNPLUGGED")
                                     print(f"{'='*70}\n")
 
                         else:
@@ -171,20 +180,34 @@ class EVCPMonitor:
             print(f"[{self.cp_id} Monitor] CENTRAL connection lost: {e}")
 
     def _monitor_progress(self):
-        """⭐ Monitor and display charging progress every 2 seconds"""
+        """Monitor and display charging progress"""
         while self.running:
+            # Check status
             with self.lock:
-                if not self.charging_active:
-                    break
+                should_stop = not self.charging_active and not self.charging_complete
+                is_complete = self.charging_complete
+                is_active = self.charging_active
+                start_time = self.charge_start_time
+            
+            # Exit if no longer charging and not complete
+            if should_stop:
+                break
+            
+            # If charging complete, spam message every 2 seconds
+            if is_complete:
+                print(f"[{self.cp_id} Monitor] 🔋 Charged to 100%, please unplug")
+                time.sleep(2)
+                continue
+            
+            # Calculate elapsed time
+            if is_active and start_time:
+                elapsed = (datetime.now() - start_time).total_seconds()
                 
-                # Calculate elapsed time
-                if self.charge_start_time:
-                    elapsed = (datetime.now() - self.charge_start_time).total_seconds()
-                    
-                    # Calculate progress (14 seconds = 100%)
-                    progress = min(int((elapsed / 14.0) * 100), 100)
-                    
-                    # Only print every 2 seconds (approximately)
+                # Calculate progress (14 seconds = 100%)
+                progress = min(int((elapsed / 14.0) * 100), 100)
+                
+                # Only print every 2 seconds (approximately)
+                with self.lock:
                     if progress >= self.last_progress_update + 14:  # 14% every 2 seconds
                         self.last_progress_update = progress
                         self.charge_progress = progress
@@ -194,13 +217,12 @@ class EVCPMonitor:
                         filled = int(bar_length * progress / 100)
                         bar = '█' * filled + '░' * (bar_length - filled)
                         
-                        print(f"\r⚡ Charging Progress: [{bar}] {progress}%", end='', flush=True)
+                        print(f"⚡ Charging Progress: [{bar}] {progress}%")
                         
                         if progress >= 100:
-                            print()  # New line after completion
-                            break
+                            self.charging_complete = True
             
-            time.sleep(2)  # Update every 2 seconds
+            time.sleep(2)
 
     def health_check_loop(self):
         """Send health checks to engine every second"""
@@ -280,7 +302,7 @@ class EVCPMonitor:
                         print(f"[{self.cp_id} Monitor] Failed to send fault: {e}")
 
     def display_menu(self):
-        """Display interactive menu with driver info"""
+        """Display interactive menu"""
         print(f"\n[{self.cp_id} Monitor] Ready. Type 'help' for commands.\n")
         
         while self.running:
@@ -291,7 +313,7 @@ class EVCPMonitor:
                     print(f"\n{'='*60}")
                     print(f"[{self.cp_id} Monitor] Available Commands:")
                     print(f"{'='*60}")
-                    print("  status  - View current engine & driver status")
+                    print("  status  - View current engine & charging status")
                     print("  fault   - Simulate engine fault")
                     print("  reset   - Reset failure counter")
                     print("  help    - Show this help")
@@ -301,17 +323,22 @@ class EVCPMonitor:
                 elif cmd == "status":
                     with self.lock:
                         engine_status = "HEALTHY ✅" if self.engine_healthy else "FAULTY ❌"
-                        driver_status = f"USED BY: {self.current_driver} 🚗" if self.current_driver else "AVAILABLE 🟢"
+                        
+                        if self.charging_complete:
+                            driver_status = "CHARGED TO 100% - WAITING FOR UNPLUG 🔋"
+                        elif self.charging_active:
+                            driver_status = "CHARGING IN PROGRESS ⚡"
+                        else:
+                            driver_status = "AVAILABLE 🟢"
                         
                         print(f"\n{'='*70}")
                         print(f"Charging Point: {self.cp_id}")
                         print(f"{'='*70}")
                         print(f"Engine Status: {engine_status}")
                         print(f"Consecutive Failures: {self.consecutive_failures}/{self.failure_threshold}")
-                        print(f"Driver Status: {driver_status}")
+                        print(f"Status: {driver_status}")
                         
-                        if self.charging_active:
-                            print(f"Charging: ACTIVE ⚡")
+                        if self.charging_active or self.charging_complete:
                             if self.charge_start_time:
                                 elapsed = (datetime.now() - self.charge_start_time).total_seconds()
                                 print(f"Time Elapsed: {int(elapsed)}s")
@@ -362,7 +389,7 @@ class EVCPMonitor:
             print(f"[{self.cp_id} Monitor] Cannot connect to CENTRAL")
             return
 
-        # ⭐ Start CENTRAL listener
+        # Start CENTRAL listener
         central_thread = threading.Thread(
             target=self._listen_central,
             daemon=True
@@ -387,7 +414,6 @@ class EVCPMonitor:
                 self.engine_socket.close()
             if self.central_socket:
                 self.central_socket.close()
-
 
 
 if __name__ == "__main__":

@@ -1,5 +1,5 @@
 # ============================================================================
-# EVCharging System - EV_CP_E (Charging Point Engine) - FIXED STATUS DISPLAY
+# EVCharging System - EV_CP_E (Charging Point Engine) - UPDATED DISPLAY
 # ============================================================================
 
 import socket
@@ -29,14 +29,12 @@ class EVCPEngine:
         self.state = CP_STATES["ACTIVATED"]
         self.current_driver = None
         self.current_session = None
+        self.charging_complete = False  # NEW: Track when 100% reached
 
         self.central_socket = None
         self.monitor_socket = None
         self.running = True
         self.lock = threading.Lock()
-        
-        # NEW: Event flag to refresh menu only when state changes
-        self.state_changed = threading.Event()
 
         # Kafka
         self.kafka = KafkaClient(f"EV_CP_E_{cp_id}")
@@ -46,17 +44,6 @@ class EVCPEngine:
         self.simulate_fault = False
 
         print(f"[{self.cp_id}] Engine initializing...")
-
-    def _display_huge_status(self, message, color_emoji="🟢"):
-        """Display HUGE impossible-to-miss status"""
-        width = 70
-        print("\n" * 3)  # Extra spacing
-        print("█" * width)
-        print("█" * width)
-        print(f"█  {color_emoji}  {self.cp_id}: {message}".ljust(width-1) + "█")
-        print("█" * width)
-        print("█" * width)
-        print("\n" * 2)
 
     def connect_to_central(self):
         """Connect to central system via socket"""
@@ -203,6 +190,7 @@ class EVCPEngine:
             if self.state == CP_STATES["ACTIVATED"]:
                 self.current_driver = driver_id
                 self.state = CP_STATES["SUPPLYING"]
+                self.charging_complete = False
                 self.current_session = {
                     "driver_id": driver_id,
                     "start_time": time.time(),
@@ -210,15 +198,9 @@ class EVCPEngine:
                     "kwh_delivered": 0.0,
                     "amount": 0.0
                 }
-        
-        # ⭐ BIG STATUS MESSAGE - Outside lock so it displays properly
-        self._display_huge_status(f"IN USE - CHARGING {driver_id}", "🔌")
-        print(f"[{self.cp_id}] ✅ Authorization confirmed for {driver_id}")
-        print(f"[{self.cp_id}] 🔋 Target: {kwh_needed} kWh @ {self.price_per_kwh}€/kWh")
-        print(f"[{self.cp_id}] ⚡ Charging session started!\n")
-        
-        # Signal menu to refresh
-        self.state_changed.set()
+
+                print(f"\n[{self.cp_id}] ✅ Charging authorized")
+                print(f"[{self.cp_id}] → IN USE - CHARGING\n")
 
     def _handle_stop_command(self):
         """Handle STOP command from CENTRAL"""
@@ -242,9 +224,9 @@ class EVCPEngine:
                 
                 self.current_driver = None
                 self.current_session = None
+                self.charging_complete = False
             
             self.state = CP_STATES["STOPPED"]
-            self.state_changed.set()
         
         print(f"[{self.cp_id}] Received STOP command from CENTRAL - now stopped")
 
@@ -252,9 +234,8 @@ class EVCPEngine:
         """Handle RESUME command from CENTRAL"""
         with self.lock:
             self.state = CP_STATES["ACTIVATED"]
-            self.state_changed.set()
-        
-        self._display_huge_status("AVAILABLE - READY FOR CHARGING", "🟢")
+            self.charging_complete = False
+        print(f"[{self.cp_id}] Received RESUME command from CENTRAL - now activated")
 
     def _handle_end_supply(self):
         """Handle END_SUPPLY command from CENTRAL"""
@@ -268,7 +249,8 @@ class EVCPEngine:
                 kwh_delivered = min(session["kwh_needed"], (elapsed / total_seconds) * session["kwh_needed"])
                 total_amount = round(kwh_delivered * self.price_per_kwh, 2)
 
-                print(f"[{self.cp_id}] Supply ended by CENTRAL for {driver_id} - {kwh_delivered:.3f} kWh, {total_amount:.2f}€")
+                print(f"\n[{self.cp_id}] Supply ended by CENTRAL")
+                print(f"[{self.cp_id}] {kwh_delivered:.3f} kWh, {total_amount:.2f}€")
 
                 end_msg = Protocol.encode(
                     Protocol.build_message(
@@ -284,13 +266,9 @@ class EVCPEngine:
                 self.state = CP_STATES["ACTIVATED"]
                 self.current_driver = None
                 self.current_session = None
+                self.charging_complete = False
                 
-                # ⭐ BIG STATUS MESSAGE
-                self._display_huge_status("AVAILABLE - DRIVER UNPLUGGED", "🟢")
-                
-                self.state_changed.set()
-            else:
-                print(f"[{self.cp_id}] No active supply to end")
+                print(f"[{self.cp_id}] → AVAILABLE\n")
 
     def stop_charging(self):
         """Simulate driver unplugging vehicle from CP"""
@@ -304,7 +282,8 @@ class EVCPEngine:
                 kwh_delivered = min(session["kwh_needed"], (elapsed / total_seconds) * session["kwh_needed"])
                 total_amount = round(kwh_delivered * self.price_per_kwh, 2)
 
-                print(f"[{self.cp_id}] Supply ended for {driver_id} - {kwh_delivered:.3f} kWh, {total_amount:.2f}€")
+                print(f"\n[{self.cp_id}] Vehicle unplugged")
+                print(f"[{self.cp_id}] {kwh_delivered:.3f} kWh, {total_amount:.2f}€")
 
                 end_msg = Protocol.encode(
                     Protocol.build_message(
@@ -317,11 +296,9 @@ class EVCPEngine:
                 self.state = CP_STATES["ACTIVATED"]
                 self.current_driver = None
                 self.current_session = None
+                self.charging_complete = False
 
-                # ⭐ BIG STATUS MESSAGE
-                self._display_huge_status("AVAILABLE - DRIVER UNPLUGGED", "🟢")
-                
-                self.state_changed.set()
+                print(f"[{self.cp_id}] → AVAILABLE\n")
                 return True
 
         return False
@@ -353,14 +330,18 @@ class EVCPEngine:
 
                         if session["kwh_delivered"] >= session["kwh_needed"]:
                             session["kwh_delivered"] = session["kwh_needed"]
-                            print(f"\n[{self.cp_id}] 🔋 CHARGING COMPLETE - Target reached!")
-                            self.stop_charging()
+                            
+                            if not self.charging_complete:
+                                self.charging_complete = True
+                                print(f"\n[{self.cp_id}] 🔋 Charged fully, waiting for driver to unplug")
+                            
                             continue
 
                         amount = session["kwh_delivered"] * self.price_per_kwh
                         session["amount"] = amount
 
-                        print(f"[{self.cp_id}] ⚡ {session['kwh_delivered']:.3f} kWh | {amount:.2f}€")
+                        # Display charging progress
+                        print(f"[{self.cp_id}] {session['kwh_delivered']:.3f} kWh | {amount:.2f}€ (IN USE - CHARGING)")
 
                         try:
                             update_msg = Protocol.encode(
@@ -378,70 +359,33 @@ class EVCPEngine:
             except Exception as e:
                 print(f"[{self.cp_id}] ❌ Error in status update loop: {e}")
 
+    def status_display_loop(self):
+        """Display status every 2 seconds"""
+        while self.running:
+            time.sleep(2)
+            
+            with self.lock:
+                if self.state == CP_STATES["ACTIVATED"]:
+                    print(f"[{self.cp_id}] → AVAILABLE")
+                elif self.state == CP_STATES["SUPPLYING"] and self.charging_complete:
+                    print(f"[{self.cp_id}] 🔋 Charged fully, waiting for driver to unplug")
+
     def display_menu(self):
-        """Display interactive menu - NOW PAUSES PROPERLY"""
+        """Display interactive menu for CP operations"""
         while self.running:
             try:
-                # Clear and show current status
-                print(f"\n{'='*60}")
-                print(f"  {self.cp_id} STATUS PANEL")
-                print(f"{'='*60}")
-                print(f"  State: {self.state}")
-                print(f"  Price: {self.price_per_kwh}€/kWh")
+                time.sleep(0.5)  # Small delay to allow other threads to print
                 
-                if self.state == CP_STATES["SUPPLYING"]:
-                    print(f"  🔌 CURRENTLY CHARGING: {self.current_driver}")
-                    with self.lock:
-                        if self.current_session:
-                            print(f"  📊 Progress: {self.current_session['kwh_delivered']:.3f} kWh")
-                            print(f"  💰 Cost: {self.current_session.get('amount', 0):.2f}€")
-                    print(f"{'='*60}")
-                    print("\n  Options:")
-                    print("    1. Stop charging (unplug)")
-                    print("    f. Simulate fault")
-                    print(f"{'='*60}")
-                    choice = input("\n  Your choice: ").strip().lower()
-                    
-                    if choice == "1":
-                        self.stop_charging()
-                    elif choice == "f":
-                        self.simulate_fault = True
-                        print(f"\n  ⚠️  Fault simulated - monitor will detect")
-                        time.sleep(3)
-                        self.simulate_fault = False
-                        print(f"  ✓ Fault cleared\n")
-
-                elif self.state == CP_STATES["ACTIVATED"]:
-                    print(f"  🟢 AVAILABLE - Waiting for driver")
-                    print(f"{'='*60}")
-                    print("\n  Waiting for charge requests...")
-                    print("  (Press Ctrl+C to exit)")
-                    print(f"{'='*60}\n")
-                    
-                    # ⭐ WAIT FOR STATE CHANGE INSTEAD OF LOOPING
-                    self.state_changed.wait(timeout=10)
-                    self.state_changed.clear()
-
-                else:
-                    print(f"  ⚠️  State: {self.state}")
-                    print(f"{'='*60}\n")
-                    time.sleep(2)
-
-            except KeyboardInterrupt:
-                print(f"\n  Exiting menu...")
-                break
+                # Just wait, status is displayed by status_display_loop
+                
             except Exception as e:
-                print(f"\n  Menu error: {e}")
-                time.sleep(1)
+                print(f"Menu error: {e}")
 
     def run(self):
         """Run the CP engine"""
         if not self.connect_to_central():
             print(f"[{self.cp_id}] Cannot connect to CENTRAL")
             return
-
-        # Show initial huge status
-        self._display_huge_status("AVAILABLE - READY FOR CHARGING", "🟢")
 
         # Start monitor listener
         monitor_thread = threading.Thread(
@@ -456,6 +400,13 @@ class EVCPEngine:
             daemon=True
         )
         updater_thread.start()
+
+        # Start status display
+        display_thread = threading.Thread(
+            target=self.status_display_loop,
+            daemon=True
+        )
+        display_thread.start()
 
         # Run menu
         try:
