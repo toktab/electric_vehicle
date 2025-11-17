@@ -142,7 +142,7 @@ class EVCentral:
         fields = Protocol.parse_message(message)
         msg_type = fields[0]
 
-        print(f"[EV_Central] 📨 Received: {msg_type} from {client_id}")
+        # print(f"[EV_Central] 📨 Received: {msg_type} from {client_id}")
 
         if msg_type == MessageTypes.REGISTER:
             self._handle_register(fields, client_socket, client_id)
