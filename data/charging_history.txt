@@ -79,3 +79,5 @@
 {"timestamp": "2025-11-16T19:09:17.031766", "cp_id": "CP-001", "driver_id": "DRIVER-AUTO", "kwh_delivered": 2.142857142857143, "total_amount": 0.64, "duration_seconds": 3}
 {"timestamp": "2025-11-16T19:09:57.010999", "cp_id": "CP-001", "driver_id": "DRIVER-AUTO", "kwh_delivered": 6.428571428571429, "total_amount": 1.93, "duration_seconds": 9}
 {"timestamp": "2025-11-16T19:10:22.668854", "cp_id": "CP-002", "driver_id": "DRIVER-001", "kwh_delivered": 10.0, "total_amount": 3.5, "duration_seconds": 17}
+{"timestamp": "2025-11-17T00:39:35.032950", "cp_id": "CP-001", "driver_id": "DRIVER-AUTO", "kwh_delivered": 8.571428571428571, "total_amount": 2.57, "duration_seconds": 12}
+{"timestamp": "2025-11-17T00:40:15.031557", "cp_id": "CP-001", "driver_id": "DRIVER-AUTO", "kwh_delivered": 6.428571428571429, "total_amount": 1.93, "duration_seconds": 9}

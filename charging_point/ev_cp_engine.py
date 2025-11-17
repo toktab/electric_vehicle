@@ -343,7 +343,10 @@ class EVCPEngine:
                         amount = session["kwh_delivered"] * self.price_per_kwh
                         session["amount"] = amount
 
-                        # ✅ CRITICAL FIX: Send SUPPLY_UPDATE with correct format
+                        # ✅ ADD THIS LINE - Display charging progress locally
+                        print(f"[{self.cp_id}] Charging: {session['kwh_delivered']:.3f} kWh, {amount:.2f}€ (Price: {self.price_per_kwh}€/kWh)")
+
+                        # Send SUPPLY_UPDATE to CENTRAL
                         try:
                             update_msg = Protocol.encode(
                                 Protocol.build_message(
@@ -354,7 +357,8 @@ class EVCPEngine:
                                 )
                             )
                             self.central_socket.send(update_msg)
-                            print(f"[{self.cp_id}] 📤 SUPPLY_UPDATE sent: {kwh_this_second:.6f} kWh increment, total: {session['kwh_delivered']:.3f} kWh, {amount:.2f}€")
+                            # Optional: Uncomment for debugging message sending
+                            # print(f"[{self.cp_id}] 📤 SUPPLY_UPDATE sent: {kwh_this_second:.6f} kWh increment")
                         except Exception as e:
                             print(f"[{self.cp_id}] ❌ Failed to send SUPPLY_UPDATE: {e}")
 
