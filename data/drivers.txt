@@ -1,3 +1,3 @@
-{"driver_id": "DRIVER-001", "status": "IDLE", "total_charges": 23, "total_spent": 37.0, "registered_at": "2025-10-26T21:55:15.461688"}
-{"driver_id": "DRIVER-AUTO", "status": "IDLE", "total_charges": 105, "total_spent": 77.22999999999998, "registered_at": "2025-10-26T21:55:16.431878"}
+{"driver_id": "DRIVER-001", "status": "IDLE", "total_charges": 29, "total_spent": 128.0, "registered_at": "2025-10-26T21:55:15.461688"}
+{"driver_id": "DRIVER-AUTO", "status": "IDLE", "total_charges": 123, "total_spent": 112.41, "registered_at": "2025-10-26T21:55:16.431878"}
 {"driver_id": "DRIVER-002", "status": "IDLE", "total_charges": 1, "total_spent": 0.0, "registered_at": "2025-10-26T21:55:17.244977"}

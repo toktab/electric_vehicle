@@ -1,5 +1,5 @@
 # ============================================================================
-# EVCharging System - EV_CP_M (Charging Point Monitor) - UPDATED
+# EVCharging System - EV_CP_M (Charging Point Monitor) - FANCY UI
 # ============================================================================
 
 import socket
@@ -38,7 +38,7 @@ class EVCPMonitor:
         self.charge_kwh_needed = 0
         self.charge_progress = 0
         self.last_progress_update = 0
-        self.charging_complete = False  # NEW: Track when 100% reached
+        self.charging_complete = False
 
         print(f"[{self.cp_id} Monitor] Initializing...")
         print(f"[{self.cp_id} Monitor] Central: {self.central_host}:{self.central_port}")
@@ -129,12 +129,15 @@ class EVCPMonitor:
                                     self.last_progress_update = 0
                                     self.charging_complete = False
                                 
-                                print(f"\n{'='*70}")
-                                print(f"🚗 Driver started charging")
-                                print(f"{'='*70}")
-                                print(f"   Time: {self.charge_start_time.strftime('%H:%M:%S')}")
-                                print(f"   Estimated Duration: ~14 seconds")
-                                print(f"{'='*70}\n")
+                                print(f"\n╔{'═'*68}╗")
+                                print(f"║{' '*68}║")
+                                print(f"║  🚗  DRIVER CONNECTED - CHARGING SESSION STARTED  {'⚡':<22}║")
+                                print(f"║{' '*68}║")
+                                print(f"╠{'═'*68}╣")
+                                print(f"║  📅 Start Time: {self.charge_start_time.strftime('%H:%M:%S'):<50}║")
+                                print(f"║  ⏱️  Estimated Duration: ~14 seconds{' '*32}║")
+                                print(f"║  🔋 Target: 100%{' '*52}║")
+                                print(f"╚{'═'*68}╝\n")
                                 
                                 # Start progress monitoring thread
                                 progress_thread = threading.Thread(
@@ -149,23 +152,45 @@ class EVCPMonitor:
                                     self.charging_complete = True
                                     self.charge_progress = 100
                                 
-                                print(f"\n{'='*70}")
-                                print(f"🔋 CHARGING COMPLETED - 100%")
-                                print(f"{'='*70}\n")
+                                print(f"\n╔{'═'*68}╗")
+                                print(f"║{' '*68}║")
+                                print(f"║  🎉  CHARGING COMPLETE - 100% REACHED!  {'🔋':<26}║")
+                                print(f"║{' '*68}║")
+                                print(f"╚{'═'*68}╝\n")
 
                             # Handle driver stop notification (unplugged)
                             elif msg_type == "DRIVER_STOP":
                                 with self.lock:
                                     was_charging = self.charging_active or self.charging_complete
+                                    final_progress = self.charge_progress
                                     self.current_driver = None
                                     self.charging_active = False
                                     self.charging_complete = False
                                     self.charge_progress = 0
                                 
                                 if was_charging:
-                                    print(f"\n{'='*70}")
-                                    print(f"🔌 UNPLUGGED")
-                                    print(f"{'='*70}\n")
+                                    if final_progress >= 100:
+                                        # Full charge completed
+                                        print(f"\n╔{'═'*68}╗")
+                                        print(f"║{' '*68}║")
+                                        print(f"║  ✅  VEHICLE UNPLUGGED - SESSION COMPLETE  {'🔌':<24}║")
+                                        print(f"║{' '*68}║")
+                                        print(f"╠{'═'*68}╣")
+                                        print(f"║  🔋 Final Charge: 100%{' '*44}║")
+                                        print(f"║  💚 Battery: Full{' '*50}║")
+                                        print(f"║  🎫 Ticket: Sent{' '*50}║")
+                                        print(f"╚{'═'*68}╝\n")
+                                    else:
+                                        # Early disconnect
+                                        print(f"\n╔{'═'*68}╗")
+                                        print(f"║{' '*68}║")
+                                        print(f"║  ⚠️   VEHICLE UNPLUGGED - EARLY DISCONNECT  {'🔌':<22}║")
+                                        print(f"║{' '*68}║")
+                                        print(f"╠{'═'*68}╣")
+                                        print(f"║  🔋 Final Charge: {final_progress}%{' '*(45 - len(str(final_progress)))}║")
+                                        print(f"║  ⚡ Status: Partial charge{' '*42}║")
+                                        print(f"║  🎫 Ticket: Sent{' '*50}║")
+                                        print(f"╚{'═'*68}╝\n")
 
                         else:
                             break
@@ -195,7 +220,7 @@ class EVCPMonitor:
             
             # If charging complete, spam message every 2 seconds
             if is_complete:
-                print(f"[{self.cp_id} Monitor] 🔋 Charged to 100%, please unplug")
+                print(f"🔋 ⚡ 100% CHARGED - Please unplug vehicle to complete session ⚡ 🔋")
                 time.sleep(2)
                 continue
             
@@ -212,12 +237,15 @@ class EVCPMonitor:
                         self.last_progress_update = progress
                         self.charge_progress = progress
                         
-                        # Create progress bar
-                        bar_length = 30
+                        # Create progress bar with percentage
+                        bar_length = 40
                         filled = int(bar_length * progress / 100)
                         bar = '█' * filled + '░' * (bar_length - filled)
                         
-                        print(f"⚡ Charging Progress: [{bar}] {progress}%")
+                        # Time remaining
+                        time_remaining = max(0, 14 - int(elapsed))
+                        
+                        print(f"⚡ [{bar}] {progress}% | ⏱️  {time_remaining}s remaining")
                         
                         if progress >= 100:
                             self.charging_complete = True
@@ -253,7 +281,12 @@ class EVCPMonitor:
                             if fields[0] == "HEALTH_OK":
                                 with self.lock:
                                     if not self.engine_healthy:
-                                        print(f"\n[{self.cp_id} Monitor] ✅ Engine recovered!")
+                                        print(f"\n╔{'═'*68}╗")
+                                        print(f"║{' '*68}║")
+                                        print(f"║  ✅  ENGINE RECOVERED - System operational  {'💚':<24}║")
+                                        print(f"║{' '*68}║")
+                                        print(f"╚{'═'*68}╝\n")
+                                        
                                         # Send recovery to CENTRAL
                                         recovery_msg = Protocol.encode(
                                             Protocol.build_message(
@@ -288,8 +321,15 @@ class EVCPMonitor:
             if self.consecutive_failures >= self.failure_threshold:
                 if self.engine_healthy:
                     self.engine_healthy = False
-                    print(f"\n[{self.cp_id} Monitor] ⚠️  ENGINE FAULT DETECTED!")
-                    print(f"[{self.cp_id} Monitor] Notifying CENTRAL...")
+                    print(f"\n╔{'═'*68}╗")
+                    print(f"║{' '*68}║")
+                    print(f"║  ⚠️   ENGINE FAULT DETECTED - Critical failure!  {'🔴':<18}║")
+                    print(f"║{' '*68}║")
+                    print(f"╠{'═'*68}╣")
+                    print(f"║  🔧 Status: Not responding to health checks{' '*23}║")
+                    print(f"║  📡 Action: Notifying central system...{' '*27}║")
+                    print(f"║  ⏳ Recovery: Monitoring for reconnection{' '*24}║")
+                    print(f"╚{'═'*68}╝\n")
 
                     # Send fault to CENTRAL
                     try:
@@ -297,69 +337,67 @@ class EVCPMonitor:
                             Protocol.build_message(MessageTypes.FAULT, self.cp_id)
                         )
                         self.central_socket.send(fault_msg)
-                        print(f"[{self.cp_id} Monitor] ✅ FAULT message sent to CENTRAL\n")
                     except Exception as e:
                         print(f"[{self.cp_id} Monitor] Failed to send fault: {e}")
 
     def display_menu(self):
         """Display interactive menu"""
-        print(f"\n[{self.cp_id} Monitor] Ready. Type 'help' for commands.\n")
+        print(f"\n╔{'═'*68}╗")
+        print(f"║{' '*68}║")
+        print(f"║  {self.cp_id} MONITOR - Ready for operation  {'🖥️':<28}║")
+        print(f"║{' '*68}║")
+        print(f"╚{'═'*68}╝\n")
         
         while self.running:
             try:
-                cmd = input(f"[{self.cp_id} Monitor]> ").strip().lower()
+                cmd = input(f"\n[{self.cp_id} Monitor]> ").strip().lower()
 
                 if cmd == "help":
-                    print(f"\n{'='*60}")
-                    print(f"[{self.cp_id} Monitor] Available Commands:")
-                    print(f"{'='*60}")
-                    print("  status  - View current engine & charging status")
-                    print("  fault   - Simulate engine fault")
-                    print("  reset   - Reset failure counter")
-                    print("  help    - Show this help")
-                    print("  quit    - Exit monitor")
-                    print(f"{'='*60}\n")
+                    print(f"\n╔{'═'*68}╗")
+                    print(f"║  {self.cp_id} MONITOR COMMANDS{' '*40}║")
+                    print(f"╠{'═'*68}╣")
+                    print(f"║  status  - View current status and health{' '*26}║")
+                    print(f"║  help    - Show this help menu{' '*37}║")
+                    print(f"║  quit    - Exit monitor{' '*44}║")
+                    print(f"╚{'═'*68}╝\n")
 
                 elif cmd == "status":
                     with self.lock:
-                        engine_status = "HEALTHY ✅" if self.engine_healthy else "FAULTY ❌"
+                        engine_icon = "💚" if self.engine_healthy else "🔴"
+                        engine_text = "HEALTHY" if self.engine_healthy else "FAULTY"
                         
                         if self.charging_complete:
-                            driver_status = "CHARGED TO 100% - WAITING FOR UNPLUG 🔋"
+                            status_text = "CHARGED TO 100% - WAITING FOR UNPLUG"
+                            status_icon = "🔋"
                         elif self.charging_active:
-                            driver_status = "CHARGING IN PROGRESS ⚡"
+                            status_text = "CHARGING IN PROGRESS"
+                            status_icon = "⚡"
                         else:
-                            driver_status = "AVAILABLE 🟢"
+                            status_text = "AVAILABLE"
+                            status_icon = "🟢"
                         
-                        print(f"\n{'='*70}")
-                        print(f"Charging Point: {self.cp_id}")
-                        print(f"{'='*70}")
-                        print(f"Engine Status: {engine_status}")
-                        print(f"Consecutive Failures: {self.consecutive_failures}/{self.failure_threshold}")
-                        print(f"Status: {driver_status}")
+                        print(f"\n╔{'═'*68}╗")
+                        print(f"║  {self.cp_id} STATUS REPORT{' '*42}║")
+                        print(f"╠{'═'*68}╣")
+                        print(f"║  Engine Status: {engine_text} {engine_icon}{' '*(43 - len(engine_text))}║")
+                        print(f"║  Health Checks: {self.consecutive_failures}/{self.failure_threshold} failures{' '*37}║")
+                        print(f"║  Point Status: {status_text} {status_icon}{' '*(43 - len(status_text))}║")
                         
                         if self.charging_active or self.charging_complete:
                             if self.charge_start_time:
                                 elapsed = (datetime.now() - self.charge_start_time).total_seconds()
-                                print(f"Time Elapsed: {int(elapsed)}s")
-                                print(f"Progress: {self.charge_progress}%")
+                                print(f"╠{'═'*68}╣")
+                                print(f"║  Time Elapsed: {int(elapsed)}s{' '*(51 - len(str(int(elapsed))))}║")
+                                print(f"║  Progress: {self.charge_progress}%{' '*(55 - len(str(self.charge_progress)))}║")
                         
-                        print(f"{'='*70}\n")
-
-                elif cmd == "fault":
-                    with self.lock:
-                        print(f"\n⚠️  Simulating fault...")
-                        self.consecutive_failures = self.failure_threshold
-                        self._handle_engine_fault()
-                    print(f"✅ Fault simulation complete\n")
-
-                elif cmd == "reset":
-                    with self.lock:
-                        self.consecutive_failures = 0
-                        print(f"\n✅ Failure counter reset\n")
+                        print(f"╚{'═'*68}╝\n")
 
                 elif cmd == "quit":
-                    print(f"\n[{self.cp_id} Monitor] Shutting down...\n")
+                    print(f"\n╔{'═'*68}╗")
+                    print(f"║{' '*68}║")
+                    print(f"║  {self.cp_id} Monitor shutting down...  {'👋':<32}║")
+                    print(f"║{' '*68}║")
+                    print(f"╚{'═'*68}╝\n")
                     self.running = False
                     break
 
@@ -367,12 +405,16 @@ class EVCPMonitor:
                     continue
 
                 else:
-                    print(f"\n❌ Unknown command: '{cmd}'. Type 'help' for commands.\n")
+                    print(f"\n❌ Unknown command: '{cmd}'. Type 'help' for available commands.\n")
 
             except EOFError:
                 break
             except KeyboardInterrupt:
-                print(f"\n[{self.cp_id} Monitor] Interrupted\n")
+                print(f"\n\n╔{'═'*68}╗")
+                print(f"║{' '*68}║")
+                print(f"║  {self.cp_id} Monitor interrupted  {'⚠️':<36}║")
+                print(f"║{' '*68}║")
+                print(f"╚{'═'*68}╝\n")
                 break
             except Exception as e:
                 print(f"\n❌ Error: {e}\n")
