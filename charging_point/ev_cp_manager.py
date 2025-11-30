@@ -87,11 +87,26 @@ def create_cp():
     print(f"\n⏳ Step 2/3: Waiting for Central to detect (15 seconds)...")
     time.sleep(15)
     
+    # Build the image first if needed
+    print(f"\n🚀 Step 3/3: Building CP image if needed...")
+    print(f"   📦 Building evcharging-cp image...")
+    build_cmd = [
+        "docker", "build",
+        "-t", "evcharging-cp",
+        "-f", "Dockerfile.cp",
+        "."
+    ]
+    result = subprocess.run(build_cmd, capture_output=True, text=True)
+    if result.returncode != 0:
+        print(f"❌ Failed to build image: {result.stderr}")
+        return
+    print(f"   ✅ Image built successfully")
+    
     # Launch containers
-    print(f"\n🚀 Step 3/3: Launching CP containers...")
+    print(f"   🚀 Launching CP containers...")
     
     cp_port = 6000 + cp_num
-    network = "evcharging_evcharging_net"
+    network = "electric_vehicle_evcharging_net"
     
     # Launch Engine
     print(f"   🔧 Starting CP Engine...")
