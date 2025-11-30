@@ -47,3 +47,7 @@ COLORS = {
 HEALTH_CHECK_INTERVAL = 1
 SUPPLY_UPDATE_INTERVAL = 1
 WAIT_BETWEEN_REQUESTS = 4
+
+# Registry Configuration
+REGISTRY_URL = os.getenv("REGISTRY_URL", "http://localhost:5001")
+REGISTRY_POLL_INTERVAL = 10  # Check Registry every 10 seconds

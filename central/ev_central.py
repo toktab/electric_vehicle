@@ -6,6 +6,8 @@ import socket
 import threading
 import time
 import sys
+import requests
+from config import REGISTRY_URL, REGISTRY_POLL_INTERVAL
 from datetime import datetime
 from config import (
     CENTRAL_HOST, CENTRAL_PORT, CP_STATES, COLORS
@@ -65,6 +67,51 @@ class EVCentral:
                 print(f"  - {cp_id} at ({cp_data['latitude']}, {cp_data['longitude']})")
         else:
             print("[EV_Central] No stored charging points found")
+
+    def _registry_polling_loop(self):
+        """Continuously poll Registry for new CPs"""
+        while self.running:
+            time.sleep(REGISTRY_POLL_INTERVAL)
+            
+            try:
+                response = requests.get(f"{REGISTRY_URL}/list", timeout=5)
+                
+                if response.status_code == 200:
+                    data = response.json()
+                    registry_cps = data.get("charging_points", [])
+                    
+                    with self.lock:
+                        # Check for new CPs
+                        for cp_data in registry_cps:
+                            cp_id = cp_data['cp_id']
+                            
+                            if cp_id not in self.charging_points:
+                                # New CP detected!
+                                self.charging_points[cp_id] = {
+                                    "state": CP_STATES["DISCONNECTED"],
+                                    "location": (cp_data['latitude'], cp_data['longitude']),
+                                    "price_per_kwh": cp_data.get('price_per_kwh', 0.30),
+                                    "current_driver": None,
+                                    "kwh_delivered": 0,
+                                    "amount_euro": 0,
+                                    "session_start": None,
+                                    "charging_complete": False
+                                }
+                                print(f"\n[EV_Central] 🆕 NEW CP DETECTED: {cp_id} at ({cp_data['latitude']}, {cp_data['longitude']})\n")
+                        
+                        # Check for removed CPs
+                        registry_cp_ids = {cp['cp_id'] for cp in registry_cps}
+                        current_cp_ids = list(self.charging_points.keys())
+                        
+                        for cp_id in current_cp_ids:
+                            if cp_id not in registry_cp_ids:
+                                # CP was removed from Registry
+                                del self.charging_points[cp_id]
+                                print(f"\n[EV_Central] ❌ CP REMOVED: {cp_id}\n")
+            
+            except Exception as e:
+                # Silent fail - Registry might be temporarily unavailable
+                pass
 
     def start(self):
         """Start the central system"""
@@ -816,6 +863,10 @@ if __name__ == "__main__":
     # Start dashboard in separate thread
     dashboard_thread = threading.Thread(target=central.display_dashboard, daemon=True)
     dashboard_thread.start()
+
+    # Start Registry polling thread
+    registry_thread = threading.Thread(target=central._registry_polling_loop, daemon=True)
+    registry_thread.start()
 
     # Start admin console
     try:
