@@ -60,8 +60,8 @@ services:
       dockerfile: Dockerfile.central
     container_name: evcharging_central
     depends_on:
-      kafka:
-        condition: service_healthy
+      # kafka:
+      #   condition: service_healthy
       registry:  # ADD THIS LINE
         condition: service_started  # ADD THIS LINE
     environment:
@@ -206,6 +206,24 @@ services:
       - ./data:/app/data
     networks:
       - evcharging_net
+
+  # ============================================================================
+  # CP Manager - Interactive Control Panel
+  # ============================================================================
+  cp_manager:
+    build:
+      context: .
+      dockerfile: Dockerfile.manager
+    container_name: evcharging_cp_manager
+    depends_on:
+      - central
+      - registry
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock  # Access to Docker
+    networks:
+      - evcharging_net
+    stdin_open: true
+    tty: true
 
 # ============================================================================
 # Network definition

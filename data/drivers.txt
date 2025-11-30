@@ -1,0 +1,2 @@
+{"driver_id": "DRIVER-001", "status": "IDLE", "total_charges": 0, "total_spent": 0.0, "registered_at": "2025-11-30T23:32:49.311827"}
+{"driver_id": "DRIVER-002", "status": "IDLE", "total_charges": 0, "total_spent": 0.0, "registered_at": "2025-11-30T23:32:49.970125"}
