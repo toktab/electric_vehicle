@@ -58,15 +58,14 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.central
+    image: evcharging-central  # <-- ADDED THIS
     container_name: evcharging_central
     depends_on:
-      # kafka:
-      #   condition: service_healthy
-      registry:  # ADD THIS LINE
-        condition: service_started  # ADD THIS LINE
+      registry:
+        condition: service_started
     environment:
       KAFKA_BROKER: kafka:9092
-      REGISTRY_URL: http://registry:5001  # ADD THIS LINE
+      REGISTRY_URL: http://registry:5001
     ports:
       - "5000:5000"
     volumes:
@@ -83,6 +82,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.cp
+    image: evcharging-cp  # <-- ADDED THIS
     container_name: evcharging_cp_engine_1
     depends_on:
       - central
@@ -101,6 +101,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.cp
+    image: evcharging-cp  # <-- ADDED THIS
     container_name: evcharging_cp_monitor_1
     depends_on:
       - central
@@ -120,6 +121,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.cp
+    image: evcharging-cp  # <-- ADDED THIS
     container_name: evcharging_cp_engine_2
     depends_on:
       - central
@@ -138,6 +140,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.cp
+    image: evcharging-cp  # <-- ADDED THIS
     container_name: evcharging_cp_monitor_2
     depends_on:
       - cp_engine_2
@@ -157,6 +160,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.driver
+    image: evcharging-driver  # <-- ADDED THIS
     container_name: evcharging_driver_1
     depends_on:
       - kafka 
@@ -176,6 +180,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.driver
+    image: evcharging-driver  # <-- ADDED THIS
     container_name: evcharging_driver_2
     depends_on:
       - kafka 
@@ -195,6 +200,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.driver
+    image: evcharging-driver  # <-- ADDED THIS
     container_name: evcharging_driver_auto
     depends_on:
       - kafka 
@@ -214,6 +220,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.manager
+    image: evcharging-manager  # <-- ADDED THIS
     container_name: evcharging_cp_manager
     depends_on:
       - central

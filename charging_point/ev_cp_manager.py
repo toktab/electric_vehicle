@@ -87,23 +87,19 @@ def create_cp():
     print(f"\n⏳ Step 2/3: Waiting for Central to detect (15 seconds)...")
     time.sleep(15)
     
-    # Build the image first if needed
-    print(f"\n🚀 Step 3/3: Building CP image if needed...")
-    print(f"   📦 Building evcharging-cp image...")
-    build_cmd = [
-        "docker", "build",
-        "-t", "evcharging-cp",
-        "-f", "Dockerfile.cp",
-        "."
-    ]
-    result = subprocess.run(build_cmd, capture_output=True, text=True)
-    if result.returncode != 0:
-        print(f"❌ Failed to build image: {result.stderr}")
-        return
-    print(f"   ✅ Image built successfully")
+    # Check if image exists, if not, show error
+    print(f"\n🚀 Step 3/3: Launching CP containers...")
+    result = subprocess.run(
+        ["docker", "images", "-q", "evcharging-cp"],
+        capture_output=True,
+        text=True
+    )
     
-    # Launch containers
-    print(f"   🚀 Launching CP containers...")
+    if not result.stdout.strip():
+        print(f"❌ Image 'evcharging-cp' not found!")
+        print(f"\n⚠️  Please build the image first:")
+        print(f"   docker build -t evcharging-cp -f Dockerfile.cp .")
+        return
     
     cp_port = 6000 + cp_num
     network = "electric_vehicle_evcharging_net"
@@ -270,7 +266,22 @@ def view_status():
 def main():
     print_header("🔧 CP MANAGER STARTED")
     print("Connected to Registry and Central")
-    print("Ready to manage charging points\n")
+    
+    # Check if evcharging-cp image exists
+    result = subprocess.run(
+        ["docker", "images", "-q", "evcharging-cp"],
+        capture_output=True,
+        text=True
+    )
+    
+    if not result.stdout.strip():
+        print("\n⚠️  WARNING: Image 'evcharging-cp' not found!")
+        print("Please build it first:")
+        print("  docker build -t evcharging-cp -f Dockerfile.cp .")
+        print("\nContinuing anyway, but CP creation will fail...\n")
+    else:
+        print("✅ Image 'evcharging-cp' found")
+        print("Ready to manage charging points\n")
     
     while True:
         try:
