@@ -374,11 +374,12 @@
                     
                     let progressHtml = '';
                     if (cp.state === 'SUPPLYING' && cp.current_driver) {
-                        const progress = Math.min(100, (cp.kwh_delivered / 10) * 100);
+                        // Use actual progress from backend
+                        const progress = Math.min(100, Math.round((cp.kwh_delivered / (cp.kwh_needed || 10)) * 100));
                         progressHtml = `
                             <div class="progress-bar">
                                 <div class="progress-fill charging-indicator" style="width: ${progress}%">
-                                    ${progress.toFixed(0)}%
+                                    ${progress}%
                                 </div>
                             </div>
                             <div class="info-row">
@@ -387,7 +388,7 @@
                             </div>
                             <div class="info-row">
                                 <span class="info-label">🔋 Energy:</span>
-                                <span class="info-value">${cp.kwh_delivered.toFixed(2)} kWh</span>
+                                <span class="info-value">${cp.kwh_delivered.toFixed(2)} / ${(cp.kwh_needed || 10).toFixed(2)} kWh</span>
                             </div>
                             <div class="info-row">
                                 <span class="info-label">💶 Cost:</span>
@@ -556,7 +557,7 @@
         // Start auto-refresh
         function startAutoRefresh() {
             updateAll();
-            updateInterval = setInterval(updateAll, 2000); // Update every 2 seconds
+            updateInterval = setInterval(updateAll, 1000); // Update every 1 second
         }
 
         // Initialize
