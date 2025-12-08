@@ -12,6 +12,8 @@ from datetime import datetime
 from config import (
     CENTRAL_HOST, CENTRAL_PORT, CP_STATES, COLORS
 )
+from flask import Flask, jsonify, request
+from flask_cors import CORS
 from shared.protocol import Protocol, MessageTypes
 from shared.kafka_client import KafkaClient
 from shared.file_storage import FileStorage
@@ -39,6 +41,14 @@ class EVCentral:
 
         # Lock for thread safety
         self.lock = threading.Lock()
+
+        # ============== FLASK APP ==============
+        self.app = Flask(__name__)
+        CORS(self.app)  # Enable CORS for web frontend
+        self._setup_flask_routes()
+
+        # Weather alerts storage
+        self.weather_alerts = []
 
         print("[EV_Central] Initializing with file storage...")
         
@@ -852,6 +862,233 @@ class EVCentral:
         self.kafka.close()
         print("[EV_Central] Shutdown complete")
 
+    def _setup_flask_routes(self):
+        """Setup all REST API routes"""
+        
+        @self.app.route('/api/cps', methods=['GET'])
+        def get_cps():
+            """Get all charging points with their current status"""
+            with self.lock:
+                cps_list = []
+                for cp_id, cp_data in self.charging_points.items():
+                    cps_list.append({
+                        "cp_id": cp_id,
+                        "state": cp_data["state"],
+                        "location": {
+                            "latitude": cp_data["location"][0],
+                            "longitude": cp_data["location"][1]
+                        },
+                        "price_per_kwh": cp_data["price_per_kwh"],
+                        "current_driver": cp_data["current_driver"],
+                        "kwh_delivered": cp_data["kwh_delivered"],
+                        "amount_euro": cp_data["amount_euro"],
+                        "charging_complete": cp_data.get("charging_complete", False)
+                    })
+            
+            return jsonify({
+                "success": True,
+                "count": len(cps_list),
+                "charging_points": cps_list
+            }), 200
+
+        @self.app.route('/api/drivers', methods=['GET'])
+        def get_drivers():
+            """Get all drivers with their current status"""
+            with self.lock:
+                drivers_list = []
+                for driver_id, driver_data in self.drivers.items():
+                    drivers_list.append({
+                        "driver_id": driver_id,
+                        "status": driver_data["status"],
+                        "current_cp": driver_data["current_cp"]
+                    })
+            
+            return jsonify({
+                "success": True,
+                "count": len(drivers_list),
+                "drivers": drivers_list
+            }), 200
+
+        @self.app.route('/api/history', methods=['GET'])
+        def get_history():
+            """Get recent charging history"""
+            limit = request.args.get('limit', default=20, type=int)
+            history = self.storage.get_recent_history(limit)
+            
+            return jsonify({
+                "success": True,
+                "count": len(history),
+                "history": history
+            }), 200
+
+        @self.app.route('/api/status', methods=['GET'])
+        def get_status():
+            """Get overall system status"""
+            with self.lock:
+                total_cps = len(self.charging_points)
+                active_cps = sum(1 for cp in self.charging_points.values() 
+                            if cp["state"] == CP_STATES["ACTIVATED"])
+                charging_cps = sum(1 for cp in self.charging_points.values() 
+                                if cp["state"] == CP_STATES["SUPPLYING"])
+                out_of_order_cps = sum(1 for cp in self.charging_points.values() 
+                                    if cp["state"] == CP_STATES["OUT_OF_ORDER"])
+                
+                total_drivers = len(self.drivers)
+                charging_drivers = sum(1 for d in self.drivers.values() 
+                                    if d["status"] == "CHARGING")
+            
+            return jsonify({
+                "success": True,
+                "system_status": "operational",
+                "charging_points": {
+                    "total": total_cps,
+                    "active": active_cps,
+                    "charging": charging_cps,
+                    "out_of_order": out_of_order_cps
+                },
+                "drivers": {
+                    "total": total_drivers,
+                    "charging": charging_drivers
+                },
+                "weather_alerts": self.weather_alerts
+            }), 200
+
+        @self.app.route('/api/weather/alert', methods=['POST'])
+        def weather_alert():
+            """Receive weather alert from EV_W"""
+            data = request.get_json()
+            
+            if not data or 'cp_id' not in data:
+                return jsonify({
+                    "success": False,
+                    "error": "cp_id required"
+                }), 400
+            
+            cp_id = data['cp_id']
+            location = data.get('location', 'Unknown')
+            temperature = data.get('temperature', 0)
+            
+            with self.lock:
+                if cp_id not in self.charging_points:
+                    return jsonify({
+                        "success": False,
+                        "error": f"CP {cp_id} not found"
+                    }), 404
+                
+                cp = self.charging_points[cp_id]
+                
+                # If currently charging, end the session
+                if cp["state"] == CP_STATES["SUPPLYING"] and cp["current_driver"]:
+                    driver_id = cp["current_driver"]
+                    kwh = cp["kwh_delivered"]
+                    amount = cp["amount_euro"]
+                    duration = int(time.time() - cp["session_start"]) if cp["session_start"] else 0
+                    
+                    # Save session
+                    self.storage.save_charging_session(cp_id, driver_id, kwh, amount, duration)
+                    self.storage.update_driver_stats(driver_id, amount)
+                    
+                    # Notify driver
+                    if driver_id in self.entity_to_socket:
+                        try:
+                            ticket_msg = Protocol.encode(
+                                Protocol.build_message(MessageTypes.TICKET, cp_id, kwh, amount)
+                            )
+                            self.entity_to_socket[driver_id].send(ticket_msg)
+                        except:
+                            pass
+                    
+                    # Reset CP state
+                    cp["current_driver"] = None
+                    cp["kwh_delivered"] = 0
+                    cp["amount_euro"] = 0
+                    cp["session_start"] = None
+                    cp["charging_complete"] = False
+                    
+                    if driver_id in self.drivers:
+                        self.drivers[driver_id]["status"] = "IDLE"
+                        self.drivers[driver_id]["current_cp"] = None
+                
+                # Set CP to OUT_OF_ORDER
+                cp["state"] = CP_STATES["OUT_OF_ORDER"]
+                
+                # Add to weather alerts
+                alert = {
+                    "cp_id": cp_id,
+                    "location": location,
+                    "temperature": temperature,
+                    "timestamp": datetime.now().isoformat(),
+                    "message": f"⚠️ CP {cp_id} disabled - Temperature {temperature}°C"
+                }
+                self.weather_alerts.append(alert)
+            
+            print(f"\n[EV_Central] ❄️ Weather Alert: CP {cp_id} at {location} - {temperature}°C")
+            print(f"[EV_Central] → CP {cp_id} now OUT_OF_ORDER\n")
+            
+            self.kafka.publish_event("system_events", "WEATHER_ALERT", {
+                "cp_id": cp_id,
+                "location": location,
+                "temperature": temperature
+            })
+            
+            return jsonify({
+                "success": True,
+                "message": f"CP {cp_id} set to OUT_OF_ORDER due to cold weather"
+            }), 200
+
+        @self.app.route('/api/weather/clear', methods=['POST'])
+        def weather_clear():
+            """Receive weather clear from EV_W"""
+            data = request.get_json()
+            
+            if not data or 'cp_id' not in data:
+                return jsonify({
+                    "success": False,
+                    "error": "cp_id required"
+                }), 400
+            
+            cp_id = data['cp_id']
+            location = data.get('location', 'Unknown')
+            temperature = data.get('temperature', 0)
+            
+            with self.lock:
+                if cp_id not in self.charging_points:
+                    return jsonify({
+                        "success": False,
+                        "error": f"CP {cp_id} not found"
+                    }), 404
+                
+                cp = self.charging_points[cp_id]
+                
+                # Only restore if it was OUT_OF_ORDER due to weather
+                if cp["state"] == CP_STATES["OUT_OF_ORDER"]:
+                    cp["state"] = CP_STATES["ACTIVATED"]
+                    
+                    # Remove from weather alerts
+                    self.weather_alerts = [
+                        a for a in self.weather_alerts 
+                        if a["cp_id"] != cp_id
+                    ]
+            
+            print(f"\n[EV_Central] ☀️ Weather Clear: CP {cp_id} at {location} - {temperature}°C")
+            print(f"[EV_Central] → CP {cp_id} now ACTIVATED\n")
+            
+            self.kafka.publish_event("system_events", "WEATHER_CLEAR", {
+                "cp_id": cp_id,
+                "location": location,
+                "temperature": temperature
+            })
+            
+            return jsonify({
+                "success": True,
+                "message": f"CP {cp_id} restored to ACTIVATED"
+            }), 200
+
+    def start_flask(self):
+        """Start Flask REST API server"""
+        print("[EV_Central] Starting Flask REST API on port 5000...")
+        self.app.run(host='0.0.0.0', port=8080, threaded=True, debug=False)
+
 
 if __name__ == "__main__":
     central = EVCentral()
@@ -867,6 +1104,10 @@ if __name__ == "__main__":
     # Start Registry polling thread
     registry_thread = threading.Thread(target=central._registry_polling_loop, daemon=True)
     registry_thread.start()
+
+    # Start Flask REST API in separate thread
+    flask_thread = threading.Thread(target=central.start_flask, daemon=True)
+    flask_thread.start()
 
     # Start admin console
     try:
