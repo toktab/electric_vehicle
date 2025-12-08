@@ -29,11 +29,6 @@ services:
       - "9092:9092"
     networks:
       - evcharging_net
-    healthcheck:
-      test: ["CMD", "kafka-broker-api-versions", "--bootstrap-server", "localhost:9092"]
-      interval: 10s
-      timeout: 10s
-      retries: 5
 
   # ============================================================================
   # EV_Registry - REST API
@@ -61,8 +56,8 @@ services:
     image: evcharging-central
     container_name: evcharging_central
     depends_on:
-      registry:
-        condition: service_started
+      - registry
+      - kafka
     environment:
       KAFKA_BROKER: kafka:9092
       REGISTRY_URL: http://registry:5001
@@ -75,6 +70,38 @@ services:
       - evcharging_net
     stdin_open: true
     tty: true
+
+  # ============================================================================
+  # EV_W - Weather Control Office (NEW!)
+  # ============================================================================
+  weather:
+    build:
+      context: .
+      dockerfile: Dockerfile.weather
+    image: evcharging-weather
+    container_name: evcharging_weather
+    depends_on:
+      - central
+    environment:
+      CENTRAL_API_URL: http://central:8080/api/weather
+    networks:
+      - evcharging_net
+    stdin_open: true
+    tty: true
+
+  # ============================================================================
+  # Front - Web Dashboard (NEW!)
+  # ============================================================================
+  front:
+    build:
+      context: .
+      dockerfile: Dockerfile.front
+    image: evcharging-front
+    container_name: evcharging_front
+    ports:
+      - "8081:80"
+    networks:
+      - evcharging_net
 
   # ============================================================================
   # Charging Point 1 - Engine + Monitor
