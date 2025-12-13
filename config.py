@@ -51,3 +51,11 @@ WAIT_BETWEEN_REQUESTS = 4
 # Registry Configuration
 REGISTRY_URL = os.getenv("REGISTRY_URL", "http://localhost:5001")
 REGISTRY_POLL_INTERVAL = 10  # Check Registry every 10 seconds
+
+# Security Configuration
+ENCRYPTION_ENABLED = os.getenv("ENCRYPTION_ENABLED", "True") == "True"
+ENCRYPTION_KEY_LENGTH = 32  # AES-256
+
+# Audit Configuration
+AUDIT_LOG_FILE = "data/audit_log.txt"
+AUDIT_ENABLED = True

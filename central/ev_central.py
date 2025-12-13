@@ -7,6 +7,8 @@ import threading
 import time
 import sys
 import requests
+from shared.encryption import EncryptionManager
+from shared.audit_logger import log_auth, log_charge, log_fault, log_state
 from config import REGISTRY_URL, REGISTRY_POLL_INTERVAL
 from datetime import datetime
 from config import (
@@ -41,6 +43,9 @@ class EVCentral:
 
         # Lock for thread safety
         self.lock = threading.Lock()
+
+        self.encryption = EncryptionManager()
+        self.cp_encryption_keys = {}  # cp_id -> symmetric key
 
         # ============== FLASK APP ==============
         self.app = Flask(__name__)
@@ -229,6 +234,26 @@ class EVCentral:
         entity_id = fields[2]
 
         if entity_type == "CP":
+            username = fields[6] if len(fields) > 6 else None
+            password = fields[7] if len(fields) > 7 else None
+            
+            if not self._verify_cp_credentials(entity_id, username, password):
+                print(f"[EV_Central] ❌ Authentication FAILED for {entity_id}")
+                log_auth(client_id, entity_id, success=False, reason="INVALID_CREDENTIALS")
+                
+                deny_msg = Protocol.encode(
+                    Protocol.build_message(MessageTypes.DENY, entity_id, "AUTH_FAILED")
+                )
+                client_socket.send(deny_msg)
+                return
+            
+            log_auth(client_id, entity_id, success=True)
+            
+            symmetric_key = self.encryption.generate_key(password)
+            self.cp_encryption_keys[entity_id] = symmetric_key
+            
+            print(f"[EV_Central] 🔐 Generated encryption key for {entity_id}")
+            
             lat = fields[3] if len(fields) > 3 else "0"
             lon = fields[4] if len(fields) > 4 else "0"
             price = float(fields[5]) if len(fields) > 5 else 0.30
@@ -249,19 +274,25 @@ class EVCentral:
                 self.entity_to_socket[entity_id] = client_socket
 
             self.storage.save_cp(entity_id, lat, lon, price, CP_STATES["ACTIVATED"])
-
-            print(f"[EV_Central] ✅ CP Registered: {entity_id} at ({lat}, {lon}) - Saved to file")
+            self.storage.save_cp_secret(entity_id, password)
+            
+            print(f"[EV_Central] ✅ CP Registered: {entity_id} at ({lat}, {lon})")
+            
+            response = Protocol.encode(
+                Protocol.build_message(
+                    MessageTypes.ACKNOWLEDGE, 
+                    entity_id, 
+                    "OK",
+                    symmetric_key.decode()
+                )
+            )
+            client_socket.send(response)
             
             self.kafka.publish_event("system_events", "CP_REGISTERED", {
                 "cp_id": entity_id,
                 "location": (lat, lon),
                 "price": price
             })
-
-            response = Protocol.encode(
-                Protocol.build_message(MessageTypes.ACKNOWLEDGE, entity_id, "OK")
-            )
-            client_socket.send(response)
 
         elif entity_type == "DRIVER":
             with self.lock:
@@ -296,6 +327,44 @@ class EVCentral:
                     Protocol.build_message(MessageTypes.ACKNOWLEDGE, monitor_cp_id, "MONITOR_OK")
                 )
                 client_socket.send(response)
+
+    def _verify_cp_credentials(self, cp_id, username, password):
+        """Verify CP credentials via Registry API"""
+        try:
+            response = requests.post(
+                f"{REGISTRY_URL}/verify",
+                json={
+                    "cp_id": cp_id,
+                    "username": username,
+                    "password": password
+                },
+                timeout=5
+            )
+            
+            if response.status_code == 200:
+                data = response.json()
+                return data.get("valid", False)
+            
+            return False
+        
+        except Exception as e:
+            print(f"[EV_Central] Registry verification error: {e}")
+            return False
+
+    def revoke_cp_key(self, cp_id):
+        """Revoke encryption key for CP (security incident)"""
+        with self.lock:
+            if cp_id in self.cp_encryption_keys:
+                del self.cp_encryption_keys[cp_id]
+                print(f"[EV_Central] 🔐 Revoked encryption key for {cp_id}")
+                log_auth("ADMIN", cp_id, success=False, reason="KEY_REVOKED")
+                
+                if cp_id in self.entity_to_socket:
+                    try:
+                        self.entity_to_socket[cp_id].close()
+                        del self.entity_to_socket[cp_id]
+                    except:
+                        pass
 
     def _handle_charge_request(self, fields, client_socket, client_id):
         """Handle driver charging request"""
@@ -337,6 +406,8 @@ class EVCentral:
             cp["amount_euro"] = 0
             cp["kwh_needed"] = kwh_needed
             cp["charging_complete"] = False
+
+            log_charge(client_id, cp_id, driver_id, "CHARGE_START", kwh=kwh_needed)
             
             self.drivers[driver_id]["status"] = "CHARGING"
             self.drivers[driver_id]["current_cp"] = cp_id
@@ -490,6 +561,8 @@ class EVCentral:
             "total_kwh": total_kwh,
             "total_amount": total_amount
         })
+        log_charge(client_id, cp_id, driver_id, "CHARGE_END", kwh=total_kwh, amount=total_amount)
+
 
     def _handle_end_charge(self, fields, client_socket, client_id):
         """Handle manual end charge from driver"""
@@ -642,6 +715,8 @@ class EVCentral:
                     print(f"[EV_Central] Failed to notify driver of fault: {e}")
         
         self.kafka.publish_event("system_events", "CP_FAULT", {"cp_id": cp_id})
+        log_fault(client_id, cp_id, "CP_FAULT", "Health check failed")
+
 
     def _handle_recovery(self, fields, client_socket):
         """Handle recovery notification from CP monitor"""
@@ -656,6 +731,8 @@ class EVCentral:
 
         print(f"[EV_Central] ✅ CP {cp_id} recovered")
         self.kafka.publish_event("system_events", "CP_RECOVERED", {"cp_id": cp_id})
+        log_fault(client_id, cp_id, "CP_RECOVERY", "System restored")
+
 
     def _handle_query_available_cps(self, fields, client_socket, client_id):
         """Handle driver query for available CPs"""
@@ -731,8 +808,10 @@ class EVCentral:
                     print("Commands:")
                     print("  stop <CP_ID>    - Stop a charging point")
                     print("  resume <CP_ID>  - Resume a charging point")
+                    print("  revoke <CP_ID>  - Revoke encryption key")
                     print("  list            - List all charging points")
                     print("  history         - Show recent charging history")
+                    print("  audit           - Show recent audit logs")
                     print("  quit            - Shutdown system")
                     continue
 
@@ -847,6 +926,34 @@ class EVCentral:
                             print(f"❌ Failed to resume CP: {e}")
                     else:
                         print(f"❌ CP {cp_id} not found or not connected")
+                    continue
+
+                if cmd.startswith("revoke"):
+                    parts = cmd.split()
+                    if len(parts) < 2:
+                        print("❌ Usage: revoke <CP_ID>")
+                        continue
+                    
+                    cp_id = parts[1]
+                    self.revoke_cp_key(cp_id)
+                    print(f"✅ Key revoked for {cp_id}. CP must re-authenticate.")
+                    continue
+
+                if cmd == "audit":
+                    from shared.audit_logger import get_audit_logger
+                    logger = get_audit_logger()
+                    logs = logger.get_recent_logs(20)
+                    
+                    print("\n=== RECENT AUDIT LOGS ===")
+                    if not logs:
+                        print("  No logs yet")
+                    else:
+                        for log in logs:
+                            ts = log['timestamp'][:19]
+                            ip = log['source_ip']
+                            event = log['event_type']
+                            action = log['action']
+                            print(f"  {ts} | {ip} | {event} | {action}")
                     continue
 
                 print("❌ Unknown command. Type 'help' for commands.")

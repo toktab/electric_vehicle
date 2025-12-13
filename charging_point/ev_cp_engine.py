@@ -1,5 +1,5 @@
 # ============================================================================
-# EVCharging System - EV_CP_E (Charging Point Engine) - UPDATED DISPLAY
+# EVCharging System - EV_CP_E (Charging Point Engine) - UPDATED WITH SECURITY
 # ============================================================================
 
 import socket
@@ -10,16 +10,21 @@ from datetime import datetime
 from config import CP_BASE_PORT, CP_STATES, COLORS, SUPPLY_UPDATE_INTERVAL
 from shared.protocol import Protocol
 from shared.kafka_client import KafkaClient
+from shared.encryption import EncryptionManager
+from shared.audit_logger import log_auth, log_charge, log_fault, log_state
 
 
 class EVCPEngine:
     def __init__(self, cp_id, latitude, longitude, price_per_kwh, 
+                 username, password,
                  central_host="localhost", central_port=5000,
                  monitor_host="localhost", monitor_port=None):
         self.cp_id = cp_id
         self.latitude = latitude
         self.longitude = longitude
         self.price_per_kwh = float(price_per_kwh)
+        self.username = username
+        self.password = password
 
         self.central_host = central_host
         self.central_port = central_port
@@ -29,12 +34,16 @@ class EVCPEngine:
         self.state = CP_STATES["ACTIVATED"]
         self.current_driver = None
         self.current_session = None
-        self.charging_complete = False  # NEW: Track when 100% reached
+        self.charging_complete = False
 
         self.central_socket = None
         self.monitor_socket = None
         self.running = True
         self.lock = threading.Lock()
+
+        # Security components
+        self.encryption = EncryptionManager()
+        self.symmetric_key = None  # Will be set after authentication
 
         # Kafka
         self.kafka = KafkaClient(f"EV_CP_E_{cp_id}")
@@ -46,29 +55,52 @@ class EVCPEngine:
         print(f"[{self.cp_id}] Engine initializing...")
 
     def connect_to_central(self):
-        """Connect to central system via socket"""
+        """Connect to central system via socket with authentication"""
         try:
             self.central_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             self.central_socket.connect((self.central_host, self.central_port))
 
-            # Register with CENTRAL
+            # Register with CENTRAL (including credentials)
             register_msg = Protocol.encode(
                 Protocol.build_message(
                     "REGISTER", "CP", self.cp_id,
-                    self.latitude, self.longitude, self.price_per_kwh
+                    self.latitude, self.longitude, self.price_per_kwh,
+                    self.username, self.password
                 )
             )
             self.central_socket.send(register_msg)
-            print(f"[{self.cp_id}] Registered with CENTRAL")
-
-            # Start listening for messages from CENTRAL
-            thread = threading.Thread(
-                target=self._listen_central,
-                daemon=True
-            )
-            thread.start()
-
-            return True
+            
+            # Wait for authentication response
+            data = self.central_socket.recv(4096)
+            message, is_valid = Protocol.decode(data)
+            
+            if is_valid:
+                fields = Protocol.parse_message(message)
+                
+                if fields[0] == "DENY":
+                    print(f"[{self.cp_id}] ❌ Authentication FAILED: {fields[2] if len(fields) > 2 else 'Unknown'}")
+                    return False
+                
+                elif fields[0] == "ACKNOWLEDGE":
+                    # Extract symmetric key from response
+                    if len(fields) > 3:
+                        self.symmetric_key = fields[3].encode()
+                        print(f"[{self.cp_id}] ✅ Authenticated with CENTRAL")
+                        print(f"[{self.cp_id}] 🔐 Received encryption key")
+                    else:
+                        print(f"[{self.cp_id}] ⚠️ Registered but no encryption key received")
+                    
+                    # Start listening for messages from CENTRAL
+                    thread = threading.Thread(
+                        target=self._listen_central,
+                        daemon=True
+                    )
+                    thread.start()
+                    
+                    return True
+            
+            print(f"[{self.cp_id}] ❌ Invalid response from CENTRAL")
+            return False
 
         except Exception as e:
             print(f"[{self.cp_id}] Failed to connect to CENTRAL: {e}")
@@ -374,9 +406,7 @@ class EVCPEngine:
         """Display interactive menu for CP operations"""
         while self.running:
             try:
-                time.sleep(0.5)  # Small delay to allow other threads to print
-                
-                # Just wait, status is displayed by status_display_loop
+                time.sleep(0.5)
                 
             except Exception as e:
                 print(f"Menu error: {e}")
@@ -423,16 +453,19 @@ class EVCPEngine:
 
 
 if __name__ == "__main__":
-    if len(sys.argv) < 2:
-        print("Usage: python ev_cp_engine.py <CP_ID> [latitude] [longitude] [price] [central_host] [central_port]")
+    if len(sys.argv) < 4:
+        print("Usage: python ev_cp_engine.py <CP_ID> <USERNAME> <PASSWORD> [latitude] [longitude] [price] [central_host] [central_port]")
+        print("Example: python ev_cp_engine.py CP-001 cp001_user securepass123 40.5 -3.1 0.30")
         sys.exit(1)
 
     cp_id = sys.argv[1]
-    latitude = sys.argv[2] if len(sys.argv) > 2 else "40.5"
-    longitude = sys.argv[3] if len(sys.argv) > 3 else "-3.1"
-    price = sys.argv[4] if len(sys.argv) > 4 else "0.30"
-    central_host = sys.argv[5] if len(sys.argv) > 5 else "localhost"
-    central_port = int(sys.argv[6]) if len(sys.argv) > 6 else 5000
+    username = sys.argv[2]
+    password = sys.argv[3]
+    latitude = sys.argv[4] if len(sys.argv) > 4 else "40.5"
+    longitude = sys.argv[5] if len(sys.argv) > 5 else "-3.1"
+    price = sys.argv[6] if len(sys.argv) > 6 else "0.30"
+    central_host = sys.argv[7] if len(sys.argv) > 7 else "localhost"
+    central_port = int(sys.argv[8]) if len(sys.argv) > 8 else 5000
 
-    engine = EVCPEngine(cp_id, latitude, longitude, price, central_host, central_port)
+    engine = EVCPEngine(cp_id, latitude, longitude, price, username, password, central_host, central_port)
     engine.run()

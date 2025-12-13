@@ -5,9 +5,14 @@
 from flask import Flask, request, jsonify
 import json
 import os
+import sys
 import secrets
 import hashlib
 from datetime import datetime
+
+# Add parent directory to path for imports
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from shared.audit_logger import log_auth
 
 app = Flask(__name__)
 
@@ -79,6 +84,14 @@ def register_cp():
     
     registry = load_registry()
     
+    # Check if CP already registered
+    if cp_id in registry:
+        print(f"[Registry] ⚠️ CP already registered: {cp_id}")
+        return jsonify({
+            "error": "CP already registered",
+            "cp_id": cp_id
+        }), 409
+    
     # Generate credentials
     username, password = generate_credentials()
     password_hash = hash_password(password)
@@ -139,16 +152,29 @@ def verify_credentials():
     
     registry = load_registry()
     
+    # Check if CP is registered
     if cp_id not in registry:
+        log_auth(request.remote_addr, cp_id, success=False, reason="NOT_REGISTERED")
+        print(f"[Registry] ❌ Auth failed: CP not registered - {cp_id}")
         return jsonify({"valid": False, "error": "CP not registered"}), 401
     
     cp_data = registry[cp_id]
     
+    # Verify username
     if cp_data['username'] != username:
+        log_auth(request.remote_addr, cp_id, success=False, reason="INVALID_USERNAME")
+        print(f"[Registry] ❌ Auth failed: Invalid username - {cp_id}")
         return jsonify({"valid": False, "error": "Invalid username"}), 401
     
+    # Verify password
     if cp_data['password_hash'] != hash_password(password):
+        log_auth(request.remote_addr, cp_id, success=False, reason="INVALID_PASSWORD")
+        print(f"[Registry] ❌ Auth failed: Invalid password - {cp_id}")
         return jsonify({"valid": False, "error": "Invalid password"}), 401
+    
+    # Success - log authentication
+    log_auth(request.remote_addr, cp_id, success=True)
+    print(f"[Registry] ✅ Auth successful: {cp_id}")
     
     return jsonify({"valid": True, "cp_id": cp_id}), 200
 
@@ -164,11 +190,76 @@ def list_cps():
             "username": cp_data['username'],
             "latitude": cp_data['latitude'],
             "longitude": cp_data['longitude'],
+            "price_per_kwh": cp_data.get('price_per_kwh', 0.30),
             "registered_at": cp_data['registered_at']
         })
     
-    return jsonify({"charging_points": cps}), 200
+    return jsonify({
+        "charging_points": cps,
+        "count": len(cps)
+    }), 200
+
+@app.route('/cp/<cp_id>', methods=['GET'])
+def get_cp_info(cp_id):
+    """Get information about a specific CP (without password)"""
+    registry = load_registry()
+    
+    if cp_id not in registry:
+        return jsonify({"error": "CP not found"}), 404
+    
+    cp_data = registry[cp_id]
+    
+    return jsonify({
+        "cp_id": cp_id,
+        "username": cp_data['username'],
+        "latitude": cp_data['latitude'],
+        "longitude": cp_data['longitude'],
+        "price_per_kwh": cp_data.get('price_per_kwh', 0.30),
+        "registered_at": cp_data['registered_at']
+    }), 200
+
+@app.route('/reset_password/<cp_id>', methods=['POST'])
+def reset_password(cp_id):
+    """
+    Reset password for a CP (admin function)
+    Returns new credentials
+    """
+    registry = load_registry()
+    
+    if cp_id not in registry:
+        return jsonify({"error": "CP not found"}), 404
+    
+    # Generate new password
+    new_password = secrets.token_urlsafe(16)
+    password_hash = hash_password(new_password)
+    
+    # Update registry
+    registry[cp_id]['password_hash'] = password_hash
+    save_registry(registry)
+    
+    print(f"[Registry] 🔄 Password reset for CP: {cp_id}")
+    
+    return jsonify({
+        "cp_id": cp_id,
+        "username": registry[cp_id]['username'],
+        "new_password": new_password,
+        "message": "Password reset successful. Save the new password!"
+    }), 200
 
 if __name__ == "__main__":
-    print("[EV_Registry] Starting on port 5001...")
+    print("=" * 70)
+    print("EV_Registry - Charging Point Registration & Authentication Service")
+    print("=" * 70)
+    print("[EV_Registry] Starting on http://0.0.0.0:5001")
+    print("[EV_Registry] Endpoints:")
+    print("  POST   /register           - Register new CP")
+    print("  DELETE /unregister/<cp_id> - Unregister CP")
+    print("  POST   /verify             - Verify CP credentials")
+    print("  GET    /list               - List all CPs")
+    print("  GET    /cp/<cp_id>         - Get CP info")
+    print("  POST   /reset_password/<cp_id> - Reset CP password")
+    print("  GET    /health             - Health check")
+    print("=" * 70)
+    print()
+    
     app.run(host='0.0.0.0', port=5001, debug=True)

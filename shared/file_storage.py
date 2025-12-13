@@ -26,6 +26,63 @@ class FileStorage:
         # Initialize files if they don't exist
         self._init_files()
 
+    # ========================================================================
+    # CP SECRETS (for authentication)
+    # ========================================================================
+
+    def save_cp_secret(self, cp_id, secret):
+        """Save CP secret key for authentication"""
+        with self.lock:
+            secrets_file = os.path.join(self.data_dir, "cp_secrets.txt")
+            
+            # Read existing secrets
+            secrets = {}
+            if os.path.exists(secrets_file):
+                try:
+                    with open(secrets_file, 'r') as f:
+                        for line in f:
+                            line = line.strip()
+                            if line:
+                                data = json.loads(line)
+                                secrets[data['cp_id']] = data['secret']
+                except Exception as e:
+                    print(f"[FileStorage] Error reading secrets: {e}")
+            
+            # Add/update secret
+            secrets[cp_id] = secret
+            
+            # Write back
+            try:
+                with open(secrets_file, 'w') as f:
+                    for cp_id, secret in secrets.items():
+                        f.write(json.dumps({
+                            "cp_id": cp_id,
+                            "secret": secret
+                        }) + "\n")
+            except Exception as e:
+                print(f"[FileStorage] Error writing secrets: {e}")
+
+    def get_cp_secret(self, cp_id):
+        """Get CP secret for authentication"""
+        with self.lock:
+            secrets_file = os.path.join(self.data_dir, "cp_secrets.txt")
+            
+            if not os.path.exists(secrets_file):
+                return None
+            
+            try:
+                with open(secrets_file, 'r') as f:
+                    for line in f:
+                        line = line.strip()
+                        if line:
+                            data = json.loads(line)
+                            if data['cp_id'] == cp_id:
+                                return data['secret']
+            except Exception as e:
+                print(f"[FileStorage] Error reading secret: {e}")
+            
+            return None
+
     def _init_files(self):
         """Create empty files if they don't exist"""
         for filepath in [self.cp_file, self.driver_file, self.history_file]:
