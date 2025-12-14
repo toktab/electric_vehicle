@@ -2,6 +2,7 @@ FROM nginx:alpine
 
 # Copy dashboard files
 COPY front/index.html /usr/share/nginx/html/
+COPY front/cp_manager.html /usr/share/nginx/html/
 
 # Expose port 80
 EXPOSE 80
