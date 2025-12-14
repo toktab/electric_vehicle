@@ -34,15 +34,15 @@ services:
   # EV_Registry - REST API
   # ============================================================================
   registry:
-    image: python:3.11-slim
+    build:
+      context: .
+      dockerfile: Dockerfile.registry
+    image: evcharging-registry
     container_name: evcharging_registry
-    working_dir: /app
-    command: sh -c "pip install flask flask-cors && python registry/ev_registry.py"
-    volumes:
-      - ./registry:/app/registry
-      - ./data:/app/data
     ports:
       - "5001:5001"
+    volumes:
+      - ./data:/app/data
     networks:
       - evcharging_net
 

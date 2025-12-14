@@ -3,6 +3,7 @@
 # ============================================================================
 
 from flask import Flask, request, jsonify
+from flask_cors import CORS
 import json
 import os
 import secrets
@@ -10,6 +11,7 @@ import hashlib
 from datetime import datetime
 
 app = Flask(__name__)
+CORS(app)  # ✅ Enable CORS for browser access
 
 # File storage for registry data
 REGISTRY_FILE = "data/registry.txt"
@@ -78,6 +80,10 @@ def register_cp():
     price_per_kwh = data.get('price_per_kwh', 0.30)
     
     registry = load_registry()
+    
+    # Check if CP already exists
+    if cp_id in registry:
+        return jsonify({"error": f"CP {cp_id} already registered"}), 409
     
     # Generate credentials
     username, password = generate_credentials()
@@ -164,6 +170,7 @@ def list_cps():
             "username": cp_data['username'],
             "latitude": cp_data['latitude'],
             "longitude": cp_data['longitude'],
+            "price_per_kwh": cp_data.get('price_per_kwh', 0.30),
             "registered_at": cp_data['registered_at']
         })
     
@@ -171,4 +178,5 @@ def list_cps():
 
 if __name__ == "__main__":
     print("[EV_Registry] Starting on port 5001...")
-    app.run(host='0.0.0.0', port=5001, debug=True)
+    print("[EV_Registry] CORS enabled for browser access")
+    app.run(host='0.0.0.0', port=5001, debug=False)
