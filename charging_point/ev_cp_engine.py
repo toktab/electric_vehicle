@@ -43,6 +43,18 @@ class EVCPEngine:
         self.health_ok = True
         self.simulate_fault = False
 
+        self.username = username
+        self.password = password
+        
+        # If credentials not provided, generate a secret
+        if not self.username:
+            self.username = f"cp_{cp_id}"
+        if not self.password:
+            import secrets
+            self.password = secrets.token_urlsafe(16)
+        
+        print(f"[{self.cp_id}] 🔐 Credentials: {self.username}")
+
         print(f"[{self.cp_id}] Engine initializing...")
 
     def connect_to_central(self):
@@ -55,7 +67,8 @@ class EVCPEngine:
             register_msg = Protocol.encode(
                 Protocol.build_message(
                     "REGISTER", "CP", self.cp_id,
-                    self.latitude, self.longitude, self.price_per_kwh
+                    self.latitude, self.longitude, self.price_per_kwh,
+                    f"SECRET={self.password}"  # ← ADD THIS
                 )
             )
             self.central_socket.send(register_msg)
