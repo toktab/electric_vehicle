@@ -7,6 +7,8 @@ import threading
 import time
 import sys
 import requests
+from shared.encryption import EncryptionManager
+from shared.audit_logger import log_auth, log_charge, log_fault, log_state
 from config import REGISTRY_URL, REGISTRY_POLL_INTERVAL
 from datetime import datetime
 from config import (
@@ -54,6 +56,16 @@ class EVCentral:
         
         # Load existing CPs from file on startup
         self._load_stored_cps()
+
+        self.encryption = EncryptionManager()
+        self.cp_encryption_keys = {}  # cp_id -> symmetric key
+        self.cp_credentials = {}  # cp_id -> {"username": ..., "secret": ...}
+
+
+    def _is_authenticated(self, cp_id, secret):
+        """Check if CP secret is valid"""
+        stored = self.storage.get_cp_secret(cp_id)
+        return stored is not None and stored == secret
 
     def _load_stored_cps(self):
         """Load charging points from file on startup"""
@@ -199,6 +211,23 @@ class EVCentral:
         fields = Protocol.parse_message(message)
         msg_type = fields[0]
 
+        # NEW: Add authentication check for CP messages
+        if len(fields) > 1 and fields[1].startswith("CP"):
+            cp_id = fields[1]
+            
+            # Extract secret from last field (format: SECRET=xxxx)
+            last_field = fields[-1]
+            secret = last_field.replace("SECRET=", "") if last_field.startswith("SECRET=") else None
+            
+            # Verify authentication
+            if not self._is_authenticated(cp_id, secret):
+                print(f"[EV_Central] ❌ Authentication FAILED for {cp_id}")
+                log_auth(client_id, cp_id, success=False, reason="INVALID_SECRET")
+                return  # Stop processing
+            
+            # Authentication successful
+            log_auth(client_id, cp_id, success=True)
+
         # print(f"[EV_Central] 📨 Received: {msg_type} from {client_id}")
 
         if msg_type == MessageTypes.REGISTER:
@@ -233,6 +262,8 @@ class EVCentral:
             lon = fields[4] if len(fields) > 4 else "0"
             price = float(fields[5]) if len(fields) > 5 else 0.30
 
+            secret = fields[6] if len(fields) > 6 else None
+
             with self.lock:
                 self.charging_points[entity_id] = {
                     "state": CP_STATES["ACTIVATED"],
@@ -247,6 +278,10 @@ class EVCentral:
                 }
                 
                 self.entity_to_socket[entity_id] = client_socket
+
+                if secret:
+                    self.storage.save_cp_secret(entity_id, secret)
+                    log_auth(client_id, entity_id, success=True)
 
             self.storage.save_cp(entity_id, lat, lon, price, CP_STATES["ACTIVATED"])
 
@@ -381,6 +416,8 @@ class EVCentral:
             "kwh_needed": kwh_needed
         })
 
+        log_charge(client_id, cp_id, driver_id, "CHARGE_START", kwh=kwh_needed)
+
     def _handle_supply_update(self, fields, client_socket):
         """Handle real-time supply updates from CP"""
         if len(fields) < 4:
@@ -490,6 +527,8 @@ class EVCentral:
             "total_kwh": total_kwh,
             "total_amount": total_amount
         })
+
+        log_charge(client_id, cp_id, driver_id, "CHARGE_END", kwh=total_kwh, amount=total_amount)
 
     def _handle_end_charge(self, fields, client_socket, client_id):
         """Handle manual end charge from driver"""
@@ -642,6 +681,8 @@ class EVCentral:
                     print(f"[EV_Central] Failed to notify driver of fault: {e}")
         
         self.kafka.publish_event("system_events", "CP_FAULT", {"cp_id": cp_id})
+        log_fault(client_id, cp_id, "CP_FAULT", "Health check failed")
+
 
     def _handle_recovery(self, fields, client_socket):
         """Handle recovery notification from CP monitor"""
@@ -656,6 +697,7 @@ class EVCentral:
 
         print(f"[EV_Central] ✅ CP {cp_id} recovered")
         self.kafka.publish_event("system_events", "CP_RECOVERED", {"cp_id": cp_id})
+        log_fault(client_id, cp_id, "CP_RECOVERY", "System restored")
 
     def _handle_query_available_cps(self, fields, client_socket, client_id):
         """Handle driver query for available CPs"""
