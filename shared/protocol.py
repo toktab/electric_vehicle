@@ -3,14 +3,12 @@
 # ============================================================================
 
 from config import STX, ETX, DELIMITER
+from shared.encryption import EncryptionManager  # NEW
+import json  # NEW
 
 
 class Protocol:
-    """
-    Message format: <STX><DATA><ETX><LRC>
-    DATA format: field1#field2#field3...
-    LRC: XOR of all bytes in MESSAGE (STX+DATA+ETX)
-    """
+    """Message format: <STX><DATA><ETX><LRC>"""
 
     @staticmethod
     def calculate_lrc(data):
@@ -21,102 +19,92 @@ class Protocol:
         return bytes([lrc])
 
     @staticmethod
-    def encode(message):
-        """
-        Encode message: <STX><DATA><ETX><LRC>
-        message: string like "REGISTER#CP-001#40.5#-3.1"
-        """
+    def encode(message, encryption_key=None):  # NEW: encryption_key param
+        """Encode message: <STX><DATA><ETX><LRC>"""
         message_bytes = message.encode() if isinstance(message, str) else message
+        
+        # NEW: Encrypt if key provided
+        if encryption_key:
+            encrypted = EncryptionManager.encrypt(message_bytes.decode(), encryption_key)
+            message_bytes = json.dumps({"encrypted": encrypted}).encode()
+        
         data = STX + message_bytes + ETX
         lrc = Protocol.calculate_lrc(data)
         return data + lrc
 
     @staticmethod
-    def decode(raw_data):
-        """
-        Decode message from <STX><DATA><ETX><LRC>
-        Returns: (message_string, is_valid)
-        """
+    def decode(raw_data, encryption_key=None):  # NEW: encryption_key param
+        """Decode message from <STX><DATA><ETX><LRC>"""
         if len(raw_data) < 4:
             return None, False
 
-        # Check STX
         if raw_data[0:1] != STX:
             return None, False
 
-        # Find ETX
         try:
             etx_index = raw_data.index(ETX[0], 1)
         except ValueError:
             return None, False
 
-        # Extract parts
         data_part = raw_data[1:etx_index]
         received_lrc = raw_data[etx_index + 1:etx_index + 2]
 
         if len(received_lrc) != 1:
             return None, False
 
-        # Verify LRC
         message_to_check = raw_data[:etx_index + 1]
         calculated_lrc = Protocol.calculate_lrc(message_to_check)
 
         if calculated_lrc != received_lrc:
             return None, False
 
-        # Decode message
         try:
             message = data_part.decode('utf-8')
+            
+            # NEW: Decrypt if encrypted
+            if encryption_key:
+                try:
+                    msg_dict = json.loads(message)
+                    if "encrypted" in msg_dict:
+                        message = EncryptionManager.decrypt(msg_dict["encrypted"], encryption_key)
+                except:
+                    pass  # Not encrypted, use as-is
+            
             return message, True
         except Exception:
             return None, False
 
     @staticmethod
     def parse_message(message):
-        """
-        Parse decoded message into fields
-        Returns: list of fields
-        """
+        """Parse decoded message into fields"""
         return message.split('#')
 
     @staticmethod
     def build_message(*fields):
-        """
-        Build message from fields
-        Returns: properly formatted message string
-        """
+        """Build message from fields"""
         return '#'.join(str(f) for f in fields)
 
 
-# Common message types
+# Message types (unchanged)
 class MessageTypes:
-    # CP to CENTRAL
-    REGISTER = "REGISTER"                    # CP registering
-    HEARTBEAT = "HEARTBEAT"                  # CP status update
-    SUPPLY_START = "SUPPLY_START"           # CP starting supply
-    SUPPLY_UPDATE = "SUPPLY_UPDATE"         # CP supply status
-    SUPPLY_END = "SUPPLY_END"               # CP ending supply
-    FAULT = "FAULT"                         # CP health fault
-    RECOVERY = "RECOVERY"                   # CP recovered from fault
-
-    # DRIVER to CENTRAL
-    REQUEST_CHARGE = "REQUEST_CHARGE"       # Driver requesting charge
-    QUERY_AVAILABLE_CPS = "QUERY_AVAILABLE_CPS"  # Driver querying available CPs
-    END_CHARGE = "END_CHARGE"               # Driver ending charge manually
-    ACKNOWLEDGE = "ACKNOWLEDGE"             # Any acknowledgement
-
-    # CENTRAL to CP
-    AUTHORIZE = "AUTHORIZE"                 # Authorization for supply
-    DENY = "DENY"                           # Denial for supply
-    STOP_COMMAND = "STOP_COMMAND"          # Stop CP
-    RESUME_COMMAND = "RESUME_COMMAND"      # Resume CP
-    END_SUPPLY = "END_SUPPLY"               # End supply session
-    TICKET = "TICKET"                       # Final ticket
-
-    # CENTRAL to DRIVER
-    AVAILABLE_CPS = "AVAILABLE_CPS"         # List of available CPs
-
-    # MONITOR to ENGINE
-    HEALTH_CHECK = "HEALTH_CHECK"           # Health check request
-    HEALTH_OK = "HEALTH_OK"                 # Health check response OK
-    HEALTH_KO = "HEALTH_KO"                 # Health check response KO
+    REGISTER = "REGISTER"
+    HEARTBEAT = "HEARTBEAT"
+    SUPPLY_START = "SUPPLY_START"
+    SUPPLY_UPDATE = "SUPPLY_UPDATE"
+    SUPPLY_END = "SUPPLY_END"
+    FAULT = "FAULT"
+    RECOVERY = "RECOVERY"
+    REQUEST_CHARGE = "REQUEST_CHARGE"
+    QUERY_AVAILABLE_CPS = "QUERY_AVAILABLE_CPS"
+    END_CHARGE = "END_CHARGE"
+    ACKNOWLEDGE = "ACKNOWLEDGE"
+    AUTHORIZE = "AUTHORIZE"
+    DENY = "DENY"
+    STOP_COMMAND = "STOP_COMMAND"
+    RESUME_COMMAND = "RESUME_COMMAND"
+    END_SUPPLY = "END_SUPPLY"
+    TICKET = "TICKET"
+    AVAILABLE_CPS = "AVAILABLE_CPS"
+    HEALTH_CHECK = "HEALTH_CHECK"
+    HEALTH_OK = "HEALTH_OK"
+    HEALTH_KO = "HEALTH_KO"

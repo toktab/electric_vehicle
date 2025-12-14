@@ -8,6 +8,7 @@ from kafka import KafkaProducer, KafkaConsumer
 from kafka.errors import KafkaError
 from datetime import datetime
 from config import KAFKA_BROKER, KAFKA_TOPICS
+from shared.encryption import EncryptionManager  # NEW
 
 
 class KafkaClient:
@@ -17,7 +18,12 @@ class KafkaClient:
         self.component_name = component_name
         self.producer = None
         self.consumers = {}
+        self.encryption_key = None  # NEW
         self._connect_producer()
+
+    def set_encryption_key(self, password):
+        """Set encryption key from password"""
+        self.encryption_key = EncryptionManager.generate_key(password)
 
     def _connect_producer(self):
         """Connect Kafka producer"""
@@ -32,12 +38,7 @@ class KafkaClient:
             self.producer = None
 
     def publish_event(self, topic_key, event_type, data):
-        """
-        Publish event to Kafka topic
-        topic_key: key in KAFKA_TOPICS dict
-        event_type: type of event (e.g., "CP_REGISTERED")
-        data: dict with event data
-        """
+        """Publish event to Kafka topic"""
         if self.producer is None:
             return
 
@@ -50,17 +51,18 @@ class KafkaClient:
         }
 
         try:
-            self.producer.send(topic, message)
+            # NEW: Encrypt message if key is set
+            if self.encryption_key:
+                message_str = json.dumps(message)
+                encrypted = EncryptionManager.encrypt(message_str, self.encryption_key)
+                self.producer.send(topic, {"encrypted": encrypted})
+            else:
+                self.producer.send(topic, message)
         except KafkaError as e:
-            print(f"[{self.component_name}] Failed to publish to {topic}: {e}")
+            print(f"[{self.component_name}] Failed to publish: {e}")
 
     def start_consumer(self, topic_key, consumer_id, callback=None):
-        """
-        Start consuming from a Kafka topic in background thread
-        topic_key: key in KAFKA_TOPICS dict
-        consumer_id: unique identifier for this consumer
-        callback: function to call with received messages
-        """
+        """Start consuming from a Kafka topic in background thread"""
         topic = KAFKA_TOPICS.get(topic_key, "unknown")
 
         def consume_messages():
@@ -76,8 +78,19 @@ class KafkaClient:
                 self.consumers[consumer_id] = consumer
 
                 for message in consumer:
+                    msg_value = message.value
+                    
+                    # NEW: Decrypt if encrypted
+                    if self.encryption_key and isinstance(msg_value, dict) and "encrypted" in msg_value:
+                        try:
+                            decrypted = EncryptionManager.decrypt(msg_value["encrypted"], self.encryption_key)
+                            msg_value = json.loads(decrypted)
+                        except Exception as e:
+                            print(f"[{self.component_name}] Decryption failed: {e}")
+                            continue
+                    
                     if callback:
-                        callback(message.value)
+                        callback(msg_value)
 
             except Exception as e:
                 print(f"[{self.component_name}] Consumer {consumer_id} error: {e}")

@@ -186,7 +186,8 @@ class EVCentral:
                 buffer += data
 
                 while len(buffer) > 0:
-                    message, is_valid = Protocol.decode(buffer)
+                    # Decode without key first (key resolved later in _process_message)
+                    message, is_valid = Protocol.decode(buffer, None)
 
                     if is_valid:
                         etx_pos = buffer.find(b'\x03')
@@ -208,44 +209,74 @@ class EVCentral:
 
     def _process_message(self, message, client_socket, client_id):
         """Process incoming message"""
+
+        # First parse WITHOUT assuming encryption
         fields = Protocol.parse_message(message)
+        if not fields:
+            return
+
         msg_type = fields[0]
 
-        # NEW: Add authentication check for CP messages
+        encryption_key = None
+        cp_id = None
+
+        # CP-related message → resolve encryption key
         if len(fields) > 1 and fields[1].startswith("CP"):
             cp_id = fields[1]
-            
+
+            # Get encryption key for this CP
+            encryption_key = self.cp_encryption_keys.get(cp_id)
+
+            # # Re-decode message using encryption key (if any)
+            # decoded_message, is_valid = Protocol.decode(message, encryption_key)
+
+            # if not is_valid:
+            #     print(f"[EV_Central] ❌ Invalid or undecryptable message from {cp_id}")
+            #     return
+
+            # # Re-parse decrypted message
+            # fields = Protocol.parse_message(decoded_message)
+            fields = Protocol.parse_message(message)
+            msg_type = fields[0]
+
             # Extract secret from last field (format: SECRET=xxxx)
             last_field = fields[-1]
             secret = last_field.replace("SECRET=", "") if last_field.startswith("SECRET=") else None
-            
+
             # Verify authentication
             if not self._is_authenticated(cp_id, secret):
                 print(f"[EV_Central] ❌ Authentication FAILED for {cp_id}")
                 log_auth(client_id, cp_id, success=False, reason="INVALID_SECRET")
-                return  # Stop processing
-            
+                return
+
             # Authentication successful
             log_auth(client_id, cp_id, success=True)
 
-        # print(f"[EV_Central] 📨 Received: {msg_type} from {client_id}")
-
+        # Dispatch message
         if msg_type == MessageTypes.REGISTER:
             self._handle_register(fields, client_socket, client_id)
+
         elif msg_type == MessageTypes.HEARTBEAT:
             self._handle_heartbeat(fields, client_socket, client_id)
+
         elif msg_type == MessageTypes.REQUEST_CHARGE:
             self._handle_charge_request(fields, client_socket, client_id)
+
         elif msg_type == MessageTypes.QUERY_AVAILABLE_CPS:
             self._handle_query_available_cps(fields, client_socket, client_id)
+
         elif msg_type == MessageTypes.SUPPLY_UPDATE:
             self._handle_supply_update(fields, client_socket)
+
         elif msg_type == MessageTypes.SUPPLY_END:
             self._handle_supply_end(fields, client_socket)
+
         elif msg_type == MessageTypes.END_CHARGE:
             self._handle_end_charge(fields, client_socket, client_id)
+
         elif msg_type == MessageTypes.FAULT:
             self._handle_fault(fields, client_socket)
+
         elif msg_type == MessageTypes.RECOVERY:
             self._handle_recovery(fields, client_socket)
 
@@ -276,17 +307,21 @@ class EVCentral:
                     "session_start": None,
                     "charging_complete": False
                 }
-                
+
                 self.entity_to_socket[entity_id] = client_socket
 
                 if secret:
                     self.storage.save_cp_secret(entity_id, secret)
                     log_auth(client_id, entity_id, success=True)
 
+                    # Store encryption key for this CP
+                    self.cp_encryption_keys[entity_id] = EncryptionManager.generate_key(secret)
+                    self.kafka.set_encryption_key(self.cp_encryption_keys[entity_id])
+
             self.storage.save_cp(entity_id, lat, lon, price, CP_STATES["ACTIVATED"])
 
             print(f"[EV_Central] ✅ CP Registered: {entity_id} at ({lat}, {lon}) - Saved to file")
-            
+
             self.kafka.publish_event("system_events", "CP_REGISTERED", {
                 "cp_id": entity_id,
                 "location": (lat, lon),
@@ -294,8 +329,10 @@ class EVCentral:
             })
 
             response = Protocol.encode(
-                Protocol.build_message(MessageTypes.ACKNOWLEDGE, entity_id, "OK")
+                Protocol.build_message(MessageTypes.ACKNOWLEDGE, entity_id, "OK"),
+                self.cp_encryption_keys.get(entity_id)
             )
+
             client_socket.send(response)
 
         elif entity_type == "DRIVER":
@@ -305,31 +342,37 @@ class EVCentral:
                     "current_cp": None,
                     "charge_amount": 0
                 }
-                
+
                 self.entity_to_socket[entity_id] = client_socket
                 print(f"[EV_Central] 🔑 Mapped driver {entity_id} to socket")
 
             self.storage.save_driver(entity_id, "IDLE")
 
             print(f"[EV_Central] ✅ Driver Registered: {entity_id} - Saved to file")
-            
+
             response = Protocol.encode(
-                Protocol.build_message(MessageTypes.ACKNOWLEDGE, entity_id, "OK")
+                Protocol.build_message(MessageTypes.ACKNOWLEDGE, entity_id, "OK"),
+                None
             )
+
+
             client_socket.send(response)
 
         elif entity_type == "MONITOR":
             monitor_cp_id = fields[3] if len(fields) > 3 else None
-        
+
             if monitor_cp_id:
                 with self.lock:
                     self.monitors[monitor_cp_id] = client_socket
-                
+
                 print(f"[EV_Central] ✅ Monitor Registered for {monitor_cp_id}")
-                
+
                 response = Protocol.encode(
-                    Protocol.build_message(MessageTypes.ACKNOWLEDGE, monitor_cp_id, "MONITOR_OK")
+                    Protocol.build_message(MessageTypes.ACKNOWLEDGE, monitor_cp_id, "MONITOR_OK"),
+                    self.cp_encryption_keys.get(monitor_cp_id)
                 )
+
+
                 client_socket.send(response)
 
     def _handle_charge_request(self, fields, client_socket, client_id):
@@ -347,8 +390,11 @@ class EVCentral:
         with self.lock:
             if cp_id not in self.charging_points:
                 response = Protocol.encode(
-                    Protocol.build_message(MessageTypes.DENY, driver_id, cp_id, "CP_NOT_FOUND")
+                    Protocol.build_message(MessageTypes.DENY, driver_id, cp_id, "CP_NOT_FOUND"),
+                    None
                 )
+
+
                 client_socket.send(response)
                 print(f"[EV_Central] ❌ Denied: CP not found")
                 return
@@ -358,8 +404,10 @@ class EVCentral:
             if cp["state"] != CP_STATES["ACTIVATED"] or cp["current_driver"] is not None:
                 reason = f"CP_STATE_{cp['state']}" if cp["state"] != CP_STATES["ACTIVATED"] else "CP_ALREADY_IN_USE"
                 response = Protocol.encode(
-                    Protocol.build_message(MessageTypes.DENY, driver_id, cp_id, reason)
+                    Protocol.build_message(MessageTypes.DENY, driver_id, cp_id, reason),
+                    None
                 )
+
                 client_socket.send(response)
                 print(f"[EV_Central] ❌ Denied: {reason}")
                 return
@@ -380,8 +428,10 @@ class EVCentral:
 
         # Send AUTHORIZE to driver
         response = Protocol.encode(
-            Protocol.build_message(MessageTypes.AUTHORIZE, driver_id, cp_id, kwh_needed, cp["price_per_kwh"])
+            Protocol.build_message(MessageTypes.AUTHORIZE, driver_id, cp_id, kwh_needed, cp["price_per_kwh"]),
+            None
         )
+
         try:
             client_socket.send(response)
             print(f"[EV_Central] 📤 Sent AUTHORIZE to driver {driver_id}")
@@ -391,8 +441,10 @@ class EVCentral:
         # Send AUTHORIZE to CP Engine
         if cp_id in self.entity_to_socket:
             cp_auth_msg = Protocol.encode(
-                Protocol.build_message(MessageTypes.AUTHORIZE, driver_id, cp_id, kwh_needed)
+                Protocol.build_message(MessageTypes.AUTHORIZE, driver_id, cp_id, kwh_needed),
+                self.cp_encryption_keys.get(cp_id)
             )
+
             try:
                 self.entity_to_socket[cp_id].send(cp_auth_msg)
                 print(f"[EV_Central] 📤 Sent AUTHORIZE to CP {cp_id}")
@@ -403,8 +455,10 @@ class EVCentral:
         if cp_id in self.monitors:
             try:
                 monitor_notify = Protocol.encode(
-                    Protocol.build_message("DRIVER_START", cp_id, driver_id)
+                    Protocol.build_message("DRIVER_START", cp_id, driver_id),
+                    self.cp_encryption_keys.get(cp_id)
                 )
+
                 self.monitors[cp_id].send(monitor_notify)
                 print(f"[EV_Central] 📤 Notified monitor: {driver_id} started at {cp_id}")
             except Exception as e:
@@ -446,8 +500,10 @@ class EVCentral:
                         if cp_id in self.monitors:
                             try:
                                 complete_msg = Protocol.encode(
-                                    Protocol.build_message("CHARGING_COMPLETE", cp_id, driver_id)
+                                    Protocol.build_message("CHARGING_COMPLETE", cp_id, driver_id),
+                                    self.cp_encryption_keys.get(cp_id)
                                 )
+
                                 self.monitors[cp_id].send(complete_msg)
                             except Exception as e:
                                 print(f"[EV_Central] Failed to notify monitor of completion: {e}")
@@ -458,8 +514,10 @@ class EVCentral:
         if driver_id and driver_id in self.entity_to_socket:
             try:
                 update_msg = Protocol.encode(
-                    Protocol.build_message(MessageTypes.SUPPLY_UPDATE, cp_id, kwh_increment, amount)
+                    Protocol.build_message(MessageTypes.SUPPLY_UPDATE, cp_id, kwh_increment, amount),
+                    None
                 )
+
                 self.entity_to_socket[driver_id].send(update_msg)
             except Exception as e:
                 print(f"[EV_Central] Failed to forward update to {driver_id}: {e}")
@@ -504,8 +562,10 @@ class EVCentral:
         if driver_id in self.entity_to_socket:
             try:
                 ticket_msg = Protocol.encode(
-                    Protocol.build_message(MessageTypes.TICKET, cp_id, total_kwh, total_amount)
+                    Protocol.build_message(MessageTypes.TICKET, cp_id, total_kwh, total_amount),
+                    None
                 )
+
                 self.entity_to_socket[driver_id].send(ticket_msg)
                 print(f"[EV_Central] 📤 Sent TICKET to driver {driver_id}")
             except Exception as e:
@@ -514,8 +574,10 @@ class EVCentral:
         if cp_id in self.monitors:
             try:
                 monitor_notify = Protocol.encode(
-                    Protocol.build_message("DRIVER_STOP", cp_id, driver_id)
+                    Protocol.build_message("DRIVER_STOP", cp_id, driver_id),
+                    self.cp_encryption_keys.get(cp_id)
                 )
+
                 self.monitors[cp_id].send(monitor_notify)
                 print(f"[EV_Central] 📤 Notified monitor: {driver_id} unplugged from {cp_id}")
             except Exception as e:
@@ -582,8 +644,10 @@ class EVCentral:
         if cp_id in self.entity_to_socket:
             try:
                 end_supply_msg = Protocol.encode(
-                    Protocol.build_message(MessageTypes.END_SUPPLY, cp_id)
+                    Protocol.build_message(MessageTypes.END_SUPPLY, cp_id),
+                    self.cp_encryption_keys.get(cp_id)
                 )
+
                 self.entity_to_socket[cp_id].send(end_supply_msg)
                 print(f"[EV_Central] 📤 Sent END_SUPPLY to CP {cp_id}")
             except Exception as e:
@@ -592,8 +656,10 @@ class EVCentral:
         if driver_id in self.entity_to_socket:
             try:
                 ticket_msg = Protocol.encode(
-                    Protocol.build_message(MessageTypes.TICKET, cp_id, total_kwh, total_amount)
+                    Protocol.build_message(MessageTypes.TICKET, cp_id, total_kwh, total_amount),
+                    None
                 )
+
                 self.entity_to_socket[driver_id].send(ticket_msg)
                 print(f"[EV_Central] 📤 Sent ticket to driver {driver_id}")
             except Exception as e:
@@ -602,8 +668,10 @@ class EVCentral:
         if cp_id in self.monitors:
             try:
                 monitor_notify = Protocol.encode(
-                    Protocol.build_message("DRIVER_STOP", cp_id, driver_id)
+                    Protocol.build_message("DRIVER_STOP", cp_id, driver_id),
+                    self.cp_encryption_keys.get(cp_id)
                 )
+
                 self.monitors[cp_id].send(monitor_notify)
                 print(f"[EV_Central] 📤 Notified monitor: {driver_id} unplugged from {cp_id}")
             except Exception as e:
@@ -674,8 +742,10 @@ class EVCentral:
             if driver_id in self.entity_to_socket:
                 try:
                     fault_msg = Protocol.encode(
-                        Protocol.build_message(MessageTypes.DENY, driver_id, cp_id, "CP_FAULT_EMERGENCY_STOP")
+                        Protocol.build_message(MessageTypes.DENY, driver_id, cp_id, "CP_FAULT_EMERGENCY_STOP"),
+                        None
                     )
+
                     self.entity_to_socket[driver_id].send(fault_msg)
                 except Exception as e:
                     print(f"[EV_Central] Failed to notify driver of fault: {e}")
@@ -697,7 +767,7 @@ class EVCentral:
 
         print(f"[EV_Central] ✅ CP {cp_id} recovered")
         self.kafka.publish_event("system_events", "CP_RECOVERED", {"cp_id": cp_id})
-        log_fault(client_id, cp_id, "CP_RECOVERY", "System restored")
+        log_fault("SYSTEM", cp_id, "CP_RECOVERY", "System restored")
 
     def _handle_query_available_cps(self, fields, client_socket, client_id):
         """Handle driver query for available CPs"""
@@ -725,7 +795,10 @@ class EVCentral:
                 cp["price_per_kwh"]
             ])
 
-        response = Protocol.encode(Protocol.build_message(*response_fields))
+        response = Protocol.encode(
+            Protocol.build_message(*response_fields),
+            None
+        )
         client_socket.send(response)
 
         print(f"[EV_Central] Sent {len(available_cps)} available CPs to {driver_id}")
@@ -848,16 +921,19 @@ class EVCentral:
                     if cp_id in self.entity_to_socket:
                         try:
                             stop_msg = Protocol.encode(
-                                Protocol.build_message(MessageTypes.STOP_COMMAND, cp_id)
+                                Protocol.build_message(MessageTypes.STOP_COMMAND, cp_id),
+                                self.cp_encryption_keys.get(cp_id)
                             )
+
                             self.entity_to_socket[cp_id].send(stop_msg)
                             print(f"✅ CP {cp_id} stopped")
                             
                             if was_charging and driver_id and driver_id in self.entity_to_socket:
                                 ticket_msg = Protocol.encode(
-                                    Protocol.build_message(MessageTypes.TICKET, cp_id, 
-                                                          total_kwh, total_amount)
+                                    Protocol.build_message(MessageTypes.TICKET, cp_id, total_kwh, total_amount),
+                                    None
                                 )
+
                                 self.entity_to_socket[driver_id].send(ticket_msg)
                                 print(f"📤 Ticket sent to driver {driver_id}")
                                 
@@ -881,8 +957,10 @@ class EVCentral:
                         
                         try:
                             resume_msg = Protocol.encode(
-                                Protocol.build_message(MessageTypes.RESUME_COMMAND, cp_id)
+                                Protocol.build_message(MessageTypes.RESUME_COMMAND, cp_id),
+                                self.cp_encryption_keys.get(cp_id)
                             )
+
                             self.entity_to_socket[cp_id].send(resume_msg)
                             print(f"✅ CP {cp_id} resumed")
                         except Exception as e:
@@ -1034,8 +1112,10 @@ class EVCentral:
                     if driver_id in self.entity_to_socket:
                         try:
                             ticket_msg = Protocol.encode(
-                                Protocol.build_message(MessageTypes.TICKET, cp_id, kwh, amount)
+                                Protocol.build_message(MessageTypes.TICKET, cp_id, kwh, amount),
+                                None
                             )
+
                             self.entity_to_socket[driver_id].send(ticket_msg)
                         except:
                             pass

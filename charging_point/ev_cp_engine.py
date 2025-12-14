@@ -12,6 +12,7 @@ from datetime import datetime
 from config import CP_BASE_PORT, CP_STATES, COLORS, SUPPLY_UPDATE_INTERVAL
 from shared.protocol import Protocol
 from shared.kafka_client import KafkaClient
+from shared.encryption import EncryptionManager
 
 REGISTRY_URL = os.getenv("REGISTRY_URL", "http://registry:5001")
 
@@ -43,6 +44,10 @@ class EVCPEngine:
 
         # Kafka
         self.kafka = KafkaClient(f"EV_CP_E_{cp_id}")
+        
+        # NEW: Setup encryption
+        self.encryption_key = EncryptionManager.generate_key(self.password)
+        self.kafka.set_encryption_key(self.password)
 
         # Health status
         self.health_ok = True
@@ -102,8 +107,10 @@ class EVCPEngine:
                     "REGISTER", "CP", self.cp_id,
                     self.latitude, self.longitude, self.price_per_kwh,
                     self.username, self.password
-                )
+                ),
+                self.encryption_key
             )
+
             self.central_socket.send(register_msg)
             print(f"[{self.cp_id}] Registered with CENTRAL")
 
@@ -164,7 +171,7 @@ class EVCPEngine:
                     buffer += data
 
                     while len(buffer) > 0:
-                        message, is_valid = Protocol.decode(buffer)
+                        message, is_valid = Protocol.decode(buffer, self.encryption_key)
 
                         if is_valid:
                             etx_pos = buffer.find(b'\x03')
@@ -204,7 +211,7 @@ class EVCPEngine:
                 if not data:
                     break
 
-                message, is_valid = Protocol.decode(data)
+                message, is_valid = Protocol.decode(data, self.encryption_key)
                 if is_valid:
                     fields = Protocol.parse_message(message)
 
@@ -214,14 +221,18 @@ class EVCPEngine:
                             response = Protocol.encode(
                                 Protocol.build_message(
                                     "HEALTH_KO", self.cp_id
-                                )
+                                ),
+                                self.encryption_key
                             )
+
                         else:
                             response = Protocol.encode(
                                 Protocol.build_message(
                                     "HEALTH_OK", self.cp_id
-                                )
+                                ),
+                                self.encryption_key
                             )
+
                         self.monitor_socket.send(response)
 
         except Exception as e:
@@ -261,8 +272,10 @@ class EVCPEngine:
                     Protocol.build_message(
                         "SUPPLY_END", self.cp_id, driver_id,
                         kwh_delivered, total_amount
-                    )
+                    ),
+                    self.encryption_key
                 )
+
                 try:
                     self.central_socket.send(end_msg)
                 except Exception as e:
@@ -302,8 +315,10 @@ class EVCPEngine:
                     Protocol.build_message(
                         "SUPPLY_END", self.cp_id, driver_id,
                         kwh_delivered, total_amount
-                    )
+                    ),
+                    self.encryption_key
                 )
+
                 try:
                     self.central_socket.send(end_msg)
                 except Exception as e:
@@ -335,8 +350,10 @@ class EVCPEngine:
                     Protocol.build_message(
                         "SUPPLY_END", self.cp_id, driver_id,
                         kwh_delivered, total_amount
-                    )
+                    ),
+                    self.encryption_key
                 )
+
                 self.central_socket.send(end_msg)
 
                 self.state = CP_STATES["ACTIVATED"]
@@ -361,8 +378,10 @@ class EVCPEngine:
                         heartbeat = Protocol.encode(
                             Protocol.build_message(
                                 "HEARTBEAT", self.cp_id, self.state
-                            )
+                            ),
+                            self.encryption_key
                         )
+
                         self.central_socket.send(heartbeat)
                     except Exception as e:
                         print(f"[{self.cp_id}] ❌ Failed to send HEARTBEAT: {e}")
@@ -396,8 +415,10 @@ class EVCPEngine:
                                     self.cp_id,
                                     f"{kwh_this_second:.6f}",
                                     f"{amount:.2f}"
-                                )
+                                ),
+                                self.encryption_key
                             )
+
                             self.central_socket.send(update_msg)
                         except Exception as e:
                             print(f"[{self.cp_id}] ❌ Failed to send SUPPLY_UPDATE: {e}")
