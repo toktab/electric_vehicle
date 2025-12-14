@@ -6,16 +6,21 @@ import socket
 import threading
 import time
 import sys
+import requests
+import os
 from datetime import datetime
 from config import CP_BASE_PORT, CP_STATES, COLORS, SUPPLY_UPDATE_INTERVAL
 from shared.protocol import Protocol
 from shared.kafka_client import KafkaClient
 
+REGISTRY_URL = os.getenv("REGISTRY_URL", "http://registry:5001")
 
 class EVCPEngine:
     def __init__(self, cp_id, latitude, longitude, price_per_kwh, 
                  central_host="localhost", central_port=5000,
-                 monitor_host="localhost", monitor_port=None):
+                 monitor_host="localhost", monitor_port=None,
+                 username=None, password=None):
+        
         self.cp_id = cp_id
         self.latitude = latitude
         self.longitude = longitude
@@ -57,6 +62,34 @@ class EVCPEngine:
 
         print(f"[{self.cp_id}] Engine initializing...")
 
+    def _fetch_credentials_from_registry(self):
+        """Fetch credentials from Registry (if CP was pre-registered)"""
+        try:
+            response = requests.get(f"{REGISTRY_URL}/list", timeout=5)
+            response.raise_for_status()
+
+            data = response.json()
+            for cp in data.get("charging_points", []):
+                if cp.get("cp_id") == self.cp_id:
+                    self.username = cp.get("username")
+                    self.password = cp.get("password")
+
+                    if not self.username or not self.password:
+                        print(f"[{self.cp_id}] ❌ Missing credentials in Registry")
+                        sys.exit(1)
+
+                    print(f"[{self.cp_id}] ✅ Credentials loaded from Registry")
+                    print(f"[{self.cp_id}] 👤 Username: {self.username}")
+                    return
+
+            print(f"[{self.cp_id}] ❌ Not registered in Registry")
+            print(f"[{self.cp_id}] 📝 Please register via Web UI / Registry API")
+            sys.exit(1)
+
+        except Exception as e:
+            print(f"[{self.cp_id}] Registry fetch error: {e}")
+            sys.exit(1)
+    
     def connect_to_central(self):
         """Connect to central system via socket"""
         try:
@@ -68,7 +101,7 @@ class EVCPEngine:
                 Protocol.build_message(
                     "REGISTER", "CP", self.cp_id,
                     self.latitude, self.longitude, self.price_per_kwh,
-                    f"SECRET={self.password}"  # ← ADD THIS
+                    self.username, self.password
                 )
             )
             self.central_socket.send(register_msg)
