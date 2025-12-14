@@ -37,6 +37,43 @@ class FileStorage:
     # CHARGING POINTS
     # ========================================================================
 
+    def save_cp_secret(self, cp_id, secret):
+        """Save CP authentication secret"""
+        with self.lock:
+            secret_file = os.path.join(self.data_dir, "cp_secrets.txt")
+            secrets = {}
+            
+            # Read existing secrets
+            if os.path.exists(secret_file):
+                with open(secret_file, 'r') as f:
+                    for line in f:
+                        if line.strip():
+                            data = json.loads(line)
+                            secrets[data['cp_id']] = data['secret']
+            
+            # Update secret
+            secrets[cp_id] = secret
+            
+            # Write back
+            with open(secret_file, 'w') as f:
+                for cid, sec in secrets.items():
+                    f.write(json.dumps({"cp_id": cid, "secret": sec}) + "\n")
+
+    def get_cp_secret(self, cp_id):
+        """Get CP authentication secret"""
+        with self.lock:
+            secret_file = os.path.join(self.data_dir, "cp_secrets.txt")
+            if not os.path.exists(secret_file):
+                return None
+            
+            with open(secret_file, 'r') as f:
+                for line in f:
+                    if line.strip():
+                        data = json.loads(line)
+                        if data['cp_id'] == cp_id:
+                            return data['secret']
+            return None
+
     def save_cp(self, cp_id, latitude, longitude, price_per_kwh, state="ACTIVATED"):
         """Save or update charging point to file"""
         with self.lock:
